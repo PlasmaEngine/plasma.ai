@@ -1,0 +1,425 @@
+#include <AiPlugin/Navigation/Implementation/NavMeshGeneration.h>
+#include <AiPlugin/Navigation/NavMesh.h>
+#include <AiPlugin/Utils/RcMath.h>
+#include <Core/Interfaces/NavmeshGeoWorldModule.h>
+#include <Core/Physics/SurfaceResource.h>
+#include <DetourNavMesh.h>
+#include <DetourNavMeshBuilder.h>
+#include <Recast.h>
+#include <cstdint>
+
+void FillOutConfig(rcConfig& ref_cfg, const plAiNavmeshConfig& config, const plBoundingBox& bbox)
+{
+  plMemoryUtils::ZeroFill(&ref_cfg, 1);
+  ref_cfg.bmin[0] = bbox.m_vMin.x;
+  ref_cfg.bmin[1] = bbox.m_vMin.z;
+  ref_cfg.bmin[2] = bbox.m_vMin.y;
+  ref_cfg.bmax[0] = bbox.m_vMax.x;
+  ref_cfg.bmax[1] = bbox.m_vMax.z;
+  ref_cfg.bmax[2] = bbox.m_vMax.y;
+  ref_cfg.ch = config.m_fCellHeight;
+  ref_cfg.cs = config.m_fCellSize;
+  ref_cfg.walkableSlopeAngle = config.m_WalkableSlope.GetDegree();
+  ref_cfg.walkableHeight = (int)ceilf(config.m_fAgentHeight / ref_cfg.ch);
+  ref_cfg.walkableClimb = (int)floorf(config.m_fAgentStepHeight / ref_cfg.ch);
+  ref_cfg.walkableRadius = (int)ceilf(config.m_fAgentRadius / ref_cfg.cs);
+  ref_cfg.maxEdgeLen = (int)(config.m_fMaxEdgeLength / ref_cfg.cs);
+  ref_cfg.maxSimplificationError = config.m_fMaxSimplificationError;
+  ref_cfg.minRegionArea = (int)plMath::Square(config.m_fMinRegionSize);
+  ref_cfg.mergeRegionArea = (int)plMath::Square(config.m_fRegionMergeSize);
+  ref_cfg.maxVertsPerPoly = 6;
+  ref_cfg.detailSampleDist = config.m_fDetailMeshSampleDistanceFactor < 0.9f ? 0 : ref_cfg.cs * config.m_fDetailMeshSampleDistanceFactor;
+  ref_cfg.detailSampleMaxError = ref_cfg.ch * config.m_fDetailMeshSampleErrorFactor;
+  ref_cfg.borderSize = ref_cfg.walkableRadius + 3; // Reserve enough padding.
+
+  ref_cfg.bmin[0] -= ref_cfg.borderSize * ref_cfg.cs;
+  ref_cfg.bmin[2] -= ref_cfg.borderSize * ref_cfg.cs;
+  ref_cfg.bmax[0] += ref_cfg.borderSize * ref_cfg.cs;
+  ref_cfg.bmax[2] += ref_cfg.borderSize * ref_cfg.cs;
+
+  rcCalcGridSize(ref_cfg.bmin, ref_cfg.bmax, ref_cfg.cs, &ref_cfg.width, &ref_cfg.height);
+}
+
+plResult BuildRecastPolyMesh(const plAiNavmeshConfig& config, plBoundingBox aabb, rcPolyMesh& out_polyMesh, rcContext* pContext, plArrayPtr<const plVec3> vertices, plArrayPtr<const plAiNavMeshTriangle> triangles, plArrayPtr<plUInt8> triangleAreaIDs, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones)
+{
+  const float* pVertices = &vertices[0].x;
+  const plInt32* pTriangles = &triangles[0].m_VertexIdx[0];
+
+  // adjust the bounding box to the data that we got (height only)
+  {
+    float fMinY = plMath::HighValue<float>();
+    float fMaxY = -plMath::HighValue<float>();
+    for (const plVec3& v : vertices)
+    {
+      fMinY = plMath::Min(fMinY, v.y);
+      fMaxY = plMath::Max(fMaxY, v.y);
+    }
+
+    aabb.m_vMin.z = fMinY;
+    aabb.m_vMax.z = fMaxY;
+  }
+
+  rcConfig cfg;
+  FillOutConfig(cfg, config, aabb);
+
+  rcHeightfield* heightfield = rcAllocHeightfield();
+  PL_SCOPE_EXIT(rcFreeHeightField(heightfield));
+
+  if (!rcCreateHeightfield(pContext, *heightfield, cfg.width, cfg.height, cfg.bmin, cfg.bmax, cfg.cs, cfg.ch))
+  {
+    plLog::Error("[AI]Could not create solid heightfield for navmesh.");
+    return PL_FAILURE;
+  }
+
+  rcClearUnwalkableTriangles(pContext, cfg.walkableSlopeAngle, pVertices, vertices.GetCount(), pTriangles, triangles.GetCount(), triangleAreaIDs.GetPtr());
+
+  if (!rcRasterizeTriangles(pContext, pVertices, vertices.GetCount(), pTriangles, triangleAreaIDs.GetPtr(), triangles.GetCount(), *heightfield, cfg.walkableClimb))
+  {
+    plLog::Error("[AI]Could not rasterize navmesh triangles.");
+    return PL_FAILURE;
+  }
+
+  rcFilterLowHangingWalkableObstacles(pContext, cfg.walkableClimb, *heightfield);
+
+  rcFilterLedgeSpans(pContext, cfg.walkableHeight, cfg.walkableClimb, *heightfield);
+
+  rcFilterWalkableLowHeightSpans(pContext, cfg.walkableHeight, *heightfield);
+
+  rcCompactHeightfield* compactHeightfield = rcAllocCompactHeightfield();
+  PL_SCOPE_EXIT(rcFreeCompactHeightfield(compactHeightfield));
+
+  if (!rcBuildCompactHeightfield(pContext, cfg.walkableHeight, cfg.walkableClimb, *heightfield, *compactHeightfield))
+  {
+    plLog::Error("[AI]Could not build compact navmesh data.");
+    return PL_FAILURE;
+  }
+
+  // stamp dynamic-obstacle carve volumes BEFORE eroding, so the erosion adds the agent-radius
+  // clearance around them, exactly as it does for rasterized static geometry
+  // (boxes are engine space, the heightfield is recast space: (x,y,z) -> (x,z,y))
+  for (const plBoundingBox& carveBox : carveBoxes)
+  {
+    const float bmin[3] = {carveBox.m_vMin.x, carveBox.m_vMin.z, carveBox.m_vMin.y};
+    const float bmax[3] = {carveBox.m_vMax.x, carveBox.m_vMax.z, carveBox.m_vMax.y};
+    rcMarkBoxArea(pContext, bmin, bmax, RC_NULL_AREA, *compactHeightfield);
+  }
+
+  // mark nav blocker volumes with a reserved area id: regions never merge across area ids, so
+  // this forces dedicated polygons under each blocker, which the runtime Blocked flag then hits
+  // with box precision instead of blocking whole floor polygons
+  for (const plBoundingBox& zoneBox : blockerZones)
+  {
+    const float bmin[3] = {zoneBox.m_vMin.x, zoneBox.m_vMin.z, zoneBox.m_vMin.y};
+    const float bmax[3] = {zoneBox.m_vMax.x, zoneBox.m_vMax.z, zoneBox.m_vMax.y};
+    rcMarkBoxArea(pContext, bmin, bmax, plAiNavMeshBlockerZoneAreaID, *compactHeightfield);
+  }
+
+  // soft avoidance volumes: their area id survives into the runtime data, where every path
+  // search filter assigns it a high traversal cost (AI.Navmesh.AvoidZoneCost)
+  for (const plBoundingBox& zoneBox : avoidZones)
+  {
+    const float bmin[3] = {zoneBox.m_vMin.x, zoneBox.m_vMin.z, zoneBox.m_vMin.y};
+    const float bmax[3] = {zoneBox.m_vMax.x, zoneBox.m_vMax.z, zoneBox.m_vMax.y};
+    rcMarkBoxArea(pContext, bmin, bmax, plAiNavMeshAvoidZoneAreaID, *compactHeightfield);
+  }
+
+  if (!rcErodeWalkableArea(pContext, cfg.walkableRadius, *compactHeightfield))
+  {
+    plLog::Error("[AI]Could not erode navmesh with character radius");
+    return PL_FAILURE;
+  }
+
+  // Partition the heightfield so that we can use simple algorithm later to triangulate the walkable areas.
+
+  // PARTITION_WATERSHED
+  if (false)
+  {
+    // Prepare for region partitioning, by calculating distance field along the walkable surface.
+    if (!rcBuildDistanceField(pContext, *compactHeightfield))
+    {
+      plLog::Error("[AI]Could not build navmesh distance field.");
+      return PL_FAILURE;
+    }
+
+    // Partition the walkable surface into simple regions without holes.
+    if (!rcBuildRegions(pContext, *compactHeightfield, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea))
+    {
+      plLog::Error("[AI]Could not build navmesh watershed regions.");
+      return PL_FAILURE;
+    }
+  }
+
+  // PARTITION_MONOTONE
+  if (false)
+  {
+    // Partition the walkable surface into simple regions without holes.
+    // Monotone partitioning does not need distance field.
+    if (!rcBuildRegionsMonotone(pContext, *compactHeightfield, cfg.borderSize, cfg.minRegionArea, cfg.mergeRegionArea))
+    {
+      plLog::Error("[AI]Could not build monotone navmesh regions.");
+      return PL_FAILURE;
+    }
+  }
+
+  // PARTITION_LAYERS
+  if (true)
+  {
+    // Partition the walkable surface into simple regions without holes.
+    if (!rcBuildLayerRegions(pContext, *compactHeightfield, cfg.borderSize, cfg.minRegionArea))
+    {
+      plLog::Error("[AI]Could not build navmesh layer regions.");
+      return PL_FAILURE;
+    }
+  }
+
+  rcContourSet* contourSet = rcAllocContourSet();
+  PL_SCOPE_EXIT(rcFreeContourSet(contourSet));
+
+  if (!rcBuildContours(pContext, *compactHeightfield, cfg.maxSimplificationError, cfg.maxEdgeLen, *contourSet))
+  {
+    plLog::Error("[AI]Could not create navmesh contours");
+    return PL_FAILURE;
+  }
+
+  if (!rcBuildPolyMesh(pContext, *contourSet, cfg.maxVertsPerPoly, out_polyMesh))
+  {
+    plLog::Error("[AI]Could not triangulate navmesh contours");
+    return PL_FAILURE;
+  }
+
+  //////////////////////////////////////////////////////////////////////////
+  // Detour Navmesh
+
+  for (int i = 0; i < out_polyMesh.npolys; ++i)
+  {
+    if (out_polyMesh.areas[i] == plAiNavMeshBlockerZoneAreaID)
+    {
+      // the reserved id only exists to force the poly split during partitioning -
+      // downstream (filters, ground types) these polys are regular default ground
+      out_polyMesh.areas[i] = 1;
+    }
+
+    if (out_polyMesh.areas[i] != RC_NULL_AREA)
+    {
+      out_polyMesh.flags[i] = plAiNavMeshPolyFlags::Walkable;
+    }
+    else
+    {
+      out_polyMesh.flags[i] = 0;
+    }
+  }
+
+  return PL_SUCCESS;
+}
+
+plResult BuildDetourNavMeshData(const plAiNavmeshConfig& config, const rcPolyMesh& polyMesh, plDataBuffer& out_navmeshData, plVec2I32 vSectorCoord, plArrayPtr<const plAiNavLinkData> links)
+{
+  dtNavMeshCreateParams params;
+  plMemoryUtils::ZeroFill(&params, 1);
+
+  params.verts = polyMesh.verts;
+  params.vertCount = polyMesh.nverts;
+  params.polys = polyMesh.polys;
+  params.polyAreas = polyMesh.areas;
+  params.polyFlags = polyMesh.flags;
+  params.polyCount = polyMesh.npolys;
+  params.nvp = polyMesh.nvp;
+  params.walkableHeight = config.m_fAgentHeight;
+  params.walkableRadius = config.m_fAgentRadius;
+  params.walkableClimb = config.m_fAgentStepHeight;
+  rcVcopy(params.bmin, polyMesh.bmin);
+  rcVcopy(params.bmax, polyMesh.bmax);
+  params.cs = config.m_fCellSize;
+  params.ch = config.m_fCellHeight;
+  params.buildBvTree = true;
+  params.tileLayer = 0;
+  params.tileX = vSectorCoord.x;
+  params.tileY = vSectorCoord.y;
+
+  // bake nav links whose start lies in this sector as off-mesh connections
+  plHybridArray<float, 8 * 6> offMeshVerts;
+  plHybridArray<float, 8> offMeshRadii;
+  plHybridArray<unsigned short, 8> offMeshFlags;
+  plHybridArray<unsigned char, 8> offMeshAreas;
+  plHybridArray<unsigned char, 8> offMeshDirs;
+  plHybridArray<unsigned int, 8> offMeshUserIDs;
+
+  if (!links.IsEmpty())
+  {
+    for (const plAiNavLinkData& link : links)
+    {
+      const plRcPos start(link.m_vStart);
+      const plRcPos end(link.m_vEnd);
+
+      offMeshVerts.PushBack(start.m_Pos[0]);
+      offMeshVerts.PushBack(start.m_Pos[1]);
+      offMeshVerts.PushBack(start.m_Pos[2]);
+      offMeshVerts.PushBack(end.m_Pos[0]);
+      offMeshVerts.PushBack(end.m_Pos[1]);
+      offMeshVerts.PushBack(end.m_Pos[2]);
+
+      offMeshRadii.PushBack(link.m_fRadius);
+      offMeshFlags.PushBack(plAiNavMeshPolyFlags::Walkable | plAiNavMeshPolyFlags::OffMeshLink);
+      offMeshAreas.PushBack(link.m_uiAreaID);
+      offMeshDirs.PushBack(link.m_bBidirectional ? DT_OFFMESH_CON_BIDIR : 0);
+      offMeshUserIDs.PushBack(link.m_uiUserID);
+    }
+
+    params.offMeshConVerts = offMeshVerts.GetData();
+    params.offMeshConRad = offMeshRadii.GetData();
+    params.offMeshConFlags = offMeshFlags.GetData();
+    params.offMeshConAreas = offMeshAreas.GetData();
+    params.offMeshConDir = offMeshDirs.GetData();
+    params.offMeshConUserID = offMeshUserIDs.GetData();
+    params.offMeshConCount = static_cast<int>(links.GetCount());
+  }
+
+  plInt32 navDataSize = 0;
+  plUInt8* navData = nullptr;
+  PL_SCOPE_EXIT(dtFree(navData));
+
+  if (!dtCreateNavMeshData(&params, &navData, &navDataSize))
+  {
+    plLog::Error("Could not build Detour navmesh.");
+    return PL_FAILURE;
+  }
+
+  out_navmeshData.SetCountUninitialized(navDataSize);
+  plMemoryUtils::Copy(out_navmeshData.GetData(), navData, navDataSize);
+
+  return PL_SUCCESS;
+}
+
+void plNavMeshSectorGenerationTask::Execute()
+{
+  m_pWorldNavMesh->BuildSector(m_SectorID, m_pNavGeo, m_Links, m_CarveBoxes, m_BlockerZones, m_AvoidZones);
+}
+
+static plInt8 GetSurfaceGroundType(const plSurfaceResource* pSurf)
+{
+  while (pSurf)
+  {
+    const auto& desc = pSurf->GetDescriptor();
+    pSurf = nullptr;
+
+    if (desc.m_iGroundType >= 0)
+    {
+      return desc.m_iGroundType;
+    }
+    else if (desc.m_hBaseSurface.IsValid())
+    {
+      plResourceLock<plSurfaceResource> pRes(desc.m_hBaseSurface, plResourceAcquireMode::BlockTillLoaded_NeverFail);
+
+      if (pRes.GetAcquireResult() == plResourceAcquireResult::Final)
+        pSurf = pRes.GetPointer();
+    }
+  }
+
+  return 1; // the "<Default>" ground type that is not "<None>"
+}
+
+static void QueryInputGeo(const plNavmeshGeoWorldModuleInterface* pGeo, plUInt32 uiCollisionLayer, plBoundingBox bounds, plAiNavMeshInputGeo& out_inputGeo)
+{
+  bounds.Grow(plVec3(1.0f));
+
+  plHybridArray<plNavmeshTriangle, 64> triangles;
+
+  pGeo->RetrieveGeometryInArea(uiCollisionLayer, bounds, triangles);
+
+  // sort all triangles by surface (pointer)
+  triangles.Sort([](const plNavmeshTriangle& lhs, const plNavmeshTriangle& rhs)
+    { return lhs.m_pSurface < rhs.m_pSurface; });
+
+  const plSurfaceResource* pPrevSurf = nullptr;
+  plInt8 iGroundType = 1; // the "<Default>" ground type that is not "<None>"
+
+  for (plUInt32 tri = 0; tri < triangles.GetCount(); ++tri)
+  {
+    if (triangles[tri].m_pSurface != pPrevSurf)
+    {
+      pPrevSurf = triangles[tri].m_pSurface;
+
+      iGroundType = GetSurfaceGroundType(pPrevSurf);
+      PL_ASSERT_DEV(iGroundType < 32, "Area ID is out of range");
+    }
+
+    // we abuse the surface pointer to store the ground type int, so that we don't need any additional array and sorting logic
+    triangles[tri].m_pSurface = reinterpret_cast<const plSurfaceResource*>(iGroundType);
+  }
+
+  // sort all triangles by ground type (we wrote the ground type ID into the surface pointer above)
+  // this means triangles with ground type 0 will be first, and higher IDs will come later -> should rasterize them in that deterministic order
+  // and if several triangles are in the same spot, the higher ground ID should win
+  triangles.Sort([](const plNavmeshTriangle& lhs, const plNavmeshTriangle& rhs)
+    { return lhs.m_pSurface < rhs.m_pSurface; });
+
+  out_inputGeo.m_Vertices.SetCount(triangles.GetCount() * 3);
+  out_inputGeo.m_Triangles.SetCount(triangles.GetCount());
+  out_inputGeo.m_TriangleAreaIDs.SetCount(triangles.GetCount());
+
+  for (plUInt32 tri = 0; tri < triangles.GetCount(); ++tri)
+  {
+    plVec3& v1 = out_inputGeo.m_Vertices[(tri * 3) + 0];
+    plVec3& v2 = out_inputGeo.m_Vertices[(tri * 3) + 1];
+    plVec3& v3 = out_inputGeo.m_Vertices[(tri * 3) + 2];
+
+    // NOTE: inverting the triangle order here ! Recast seems to use a different winding
+    v1 = triangles[tri].m_Vertices[0];
+    v2 = triangles[tri].m_Vertices[2];
+    v3 = triangles[tri].m_Vertices[1];
+
+    // convert from pl convention (Z up) to recast convention (Y up)
+    plMath::Swap(v1.y, v1.z);
+    plMath::Swap(v2.y, v2.z);
+    plMath::Swap(v3.y, v3.z);
+
+    out_inputGeo.m_Triangles[tri].m_VertexIdx[0] = (tri * 3) + 0;
+    out_inputGeo.m_Triangles[tri].m_VertexIdx[1] = (tri * 3) + 1;
+    out_inputGeo.m_Triangles[tri].m_VertexIdx[2] = (tri * 3) + 2;
+
+    out_inputGeo.m_TriangleAreaIDs[tri] = static_cast<plUInt8>(reinterpret_cast<uintptr_t>(triangles[tri].m_pSurface));
+  }
+}
+
+void plAiNavMesh::BuildSector(SectorID sectorID, const plNavmeshGeoWorldModuleInterface* pGeo, plArrayPtr<const plAiNavLinkData> links, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones)
+{
+  const plVec2I32 sectorCoord = CalculateSectorCoord(sectorID);
+  auto& sector = m_Sectors[sectorID];
+
+  PL_ASSERT_DEV(sector.m_FlagUpdateAvailable == 0, "Shouldn't update a sector that is already being updated");
+
+  const plBoundingBox bounds = GetSectorBounds(sectorCoord, -1000, +1000);
+
+  plAiNavMeshInputGeo inputGeo;
+  {
+    plBoundingBox boundsWithBorder = bounds;
+    const float cs = m_NavmeshConfig.m_fCellSize;
+    const float borderSize = (float)ceilf(m_NavmeshConfig.m_fAgentRadius / cs) + 3.0f;
+    boundsWithBorder.m_vMin.x -= borderSize * cs;
+    boundsWithBorder.m_vMin.y -= borderSize * cs;
+    boundsWithBorder.m_vMax.x += borderSize * cs;
+    boundsWithBorder.m_vMax.y += borderSize * cs;
+    QueryInputGeo(pGeo, m_NavmeshConfig.m_uiCollisionLayer, boundsWithBorder, inputGeo);
+  }
+
+  if (!inputGeo.m_Vertices.IsEmpty())
+  {
+    rcContext recastContext;
+    rcPolyMesh polyMesh;
+
+    BuildRecastPolyMesh(m_NavmeshConfig, bounds, polyMesh, &recastContext, inputGeo.m_Vertices, inputGeo.m_Triangles, inputGeo.m_TriangleAreaIDs, carveBoxes, blockerZones, avoidZones).AssertSuccess();
+
+    if (polyMesh.nverts > 0 && polyMesh.npolys > 0)
+    {
+      BuildDetourNavMeshData(m_NavmeshConfig, polyMesh, sector.m_NavmeshDataNew, sectorCoord, links).AssertSuccess();
+    }
+  }
+
+  {
+    PL_ASSERT_DEV(sector.m_FlagUpdateAvailable == 0, "Race condition in navmesh sector update");
+    sector.m_FlagUpdateAvailable = 1;
+
+    PL_LOCK(m_Mutex);
+    m_UpdatingSectors.PushBack(sectorID);
+  }
+}

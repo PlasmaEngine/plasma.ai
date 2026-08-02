@@ -1,0 +1,21 @@
+// for a description of the options see:
+// Code/EditorPlugins/Assets/EditorPluginAssets/Assets.plPluginBundle
+
+PluginInfo
+{
+	string %DisplayName{"AI Plugin"}
+	string %Category{"AI"}
+	string %MinEngineVersion{"0.7.0"}
+	string %MaxEngineVersion{"0.7.0"}
+	string %Icon{"AIIcon.png"}
+    string %Banner{"AIBanner.png"}
+	string %Description{"Adds support for dynamic navmeshes and other AI functionality."}
+	string %EditorPlugins{"plEditorPluginAi"}
+	string %EditorEnginePlugins{}
+	string %RuntimePlugins{"plAiPlugin"}
+	string %PackageDependencies{"Recast.dll"}
+	string %RequiredPlugins{}
+	string %ExclusiveFeatures{}
+	string %EnabledInTemplates{"General3D"}
+	string %PlasmaBuildTargetName{"AiPlugin"}
+}

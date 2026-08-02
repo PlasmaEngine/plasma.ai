@@ -1,0 +1,25 @@
+<RCC>
+  <qresource prefix="AiPlugin">
+    <file>plAiPlugin.svg</file>
+  </qresource>
+  <qresource prefix="AssetIcons">
+    <file>AiBehavior.svg</file>
+    <file>AiArchetype.svg</file>
+    <file>AiEqsQuery.svg</file>
+  </qresource>
+  <qresource prefix="TypeIcons">
+    <file>plAiNavMeshPathTestComponent.svg</file>
+    <file>plAiNavigationComponent.svg</file>
+    <file>plAiAgentComponent.svg</file>
+    <file>plAiLodCenterComponent.svg</file>
+    <file>plAiCrowdAgentComponent.svg</file>
+    <file>plAiNavBlockerComponent.svg</file>
+    <file>plAiNavLinkComponent.svg</file>
+    <file>plNavMeshObstacleComponent.svg</file>
+    <file>plAiEqsQueryComponent.svg</file>
+    <file>plAiEqsQueryTestComponent.svg</file>
+    <file>plAiCoverPointComponent.svg</file>
+    <file>plAiNavMeshPrebuildComponent.svg</file>
+  </qresource>
+</RCC>
+

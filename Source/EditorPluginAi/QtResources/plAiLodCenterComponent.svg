@@ -1,0 +1,7 @@
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- AI LOD center: focus point with detail rings fading outwards -->
+<svg width="800px" height="800px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <circle cx="12" cy="12" r="1.6" fill="#ffffff" stroke="none"/>
+  <circle cx="12" cy="12" r="6"/>
+  <circle cx="12" cy="12" r="10" stroke-dasharray="3.4 3.4"/>
+</svg>

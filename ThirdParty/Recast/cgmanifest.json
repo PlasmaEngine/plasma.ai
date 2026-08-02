@@ -1,0 +1,13 @@
+{
+  "Registrations": [
+    {
+      "component": {
+        "type": "git",
+        "git": {
+          "repositoryUrl": "https://github.com/recastnavigation/recastnavigation",
+          "commitHash": "599fd0f023181c0a484df2a18cf1d75a3553852e"
+        }
+      }
+    }
+  ]
+}

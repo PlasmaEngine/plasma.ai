@@ -1,0 +1,9 @@
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Navmesh obstacle: crate on the move, re-carving as it goes -->
+<svg width="800px" height="800px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M13 3l7 3.8v7.4L13 18l-7-3.8V6.8Z"/>
+  <path d="M6 6.8l7 3.7 7-3.7"/>
+  <line x1="13" y1="10.5" x2="13" y2="18"/>
+  <line x1="1.4" y1="9" x2="3.2" y2="9"/>
+  <line x1="1.4" y1="13" x2="3.2" y2="13"/>
+</svg>
