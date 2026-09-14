@@ -101,9 +101,6 @@ void plAiNavMeshWorldModule::Initialize()
     m_WorldNavMeshes[cfg.m_sName] = PL_DEFAULT_NEW(plAiNavMesh, cfg);
   }
 
-  // the tactical layer (cover points) must observe sector changes from the very first build,
-  // so it exists whenever navmeshes exist
-  GetWorld()->GetOrCreateModule<plAiTacticalWorldModule>();
 }
 
 void plAiNavMeshWorldModule::Deinitialize()
@@ -179,6 +176,18 @@ bool plAiNavMeshWorldModule::IsSectorBuildInFlight(const plAiNavMesh* pNavMesh, 
 
 void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
 {
+  // Defer the reverse dependency until this module is registered in the world.
+  // Tactical::Initialize creates its navmesh dependency, so creating tactical
+  // during our Initialize would recursively construct both modules forever.
+  // A newly created tactical module catches up through QueueInitialBakes.
+  GetWorld()->GetOrCreateModule<plAiTacticalWorldModule>();
+
+  // Publish an empty current-frame change set even when no geometry provider
+  // exists. Consumers must never observe last frame's changes on that path.
+  m_uiChangedSectorsUpdateCounter = GetWorld()->GetUpdateCounter();
+  for (auto it = m_LastChangedSectors.GetIterator(); it.IsValid(); ++it)
+    it.Value().Clear();
+
   auto pNavGeo = GetWorld()->GetOrCreateModule<plNavmeshGeoWorldModuleInterface>();
   if (pNavGeo == nullptr)
     return;
@@ -213,12 +222,9 @@ void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
   // finalize finished sector builds (tile add/remove) per navmesh, then re-apply nav blockers:
   // rebuilt tiles come back with plain 'Walkable' flags, so blocked regions must be re-stamped.
   // The changed-sector lists stay valid for the rest of the frame (GetChangedSectorsThisFrame).
-  m_uiChangedSectorsUpdateCounter = GetWorld()->GetUpdateCounter();
-
   for (auto& nm : m_WorldNavMeshes)
   {
     plDynamicArray<plAiNavMesh::SectorID>& changedSectors = m_LastChangedSectors[nm.Value()];
-    changedSectors.Clear();
     nm.Value()->FinalizeSectorUpdates(&changedSectors);
     ApplyNavBlockers(*nm.Value(), changedSectors);
   }

@@ -52,12 +52,11 @@ void plAiTacticalWorldModule::Initialize()
 {
   SUPER::Initialize();
 
-  // Ordering note: both update functions use a low PRIORITY (= runs late in the phase) instead of
-  // m_DependsOn. A missing m_DependsOn target hard-asserts in plWorld, and neither the navmesh nor
-  // the brain module is guaranteed to exist in every world that creates this module.
-  // UpdateMaintain must run after plAiNavMeshWorldModule::Update (priority 0) - the changed-sector
-  // accessor asserts if that ever breaks. UpdateExecute must run after the brain's UpdateApply
-  // (priority 0), so all SM-state submissions and claims of the frame are in.
+  // Cover maintenance consumes this frame's navmesh changes. Create its dependency
+  // before registering maintenance, including worlds that create tactical AI first.
+  GetWorld()->GetOrCreateModule<plAiNavMeshWorldModule>();
+
+  // The brain remains optional. Execute late so its submissions are available.
 
   {
     auto updateDesc = PL_CREATE_MODULE_UPDATE_FUNCTION_DESC(plAiTacticalWorldModule::UpdateExecute, this);
@@ -71,6 +70,7 @@ void plAiTacticalWorldModule::Initialize()
   {
     auto updateDesc = PL_CREATE_MODULE_UPDATE_FUNCTION_DESC(plAiTacticalWorldModule::UpdateMaintain, this);
     updateDesc.m_Phase = plWorldModule::UpdateFunctionDesc::Phase::PostTransform;
+    updateDesc.m_DependsOn.PushBack(plMakeHashedString("plAiNavMeshWorldModule::Update"));
     updateDesc.m_bOnlyUpdateWhenSimulating = true;
     updateDesc.m_fPriority = -1000.0f;
 

@@ -185,6 +185,9 @@ protected:
   plVec3 m_vSteerPosition;
   plQuat m_qSteerRotation;
 
+  plVec3 m_vPreviousPosition = plVec3::MakeZero();
+  float m_fPreviousTimeStep = 0.0f;
+
 private:
   const char* DummyGetter() const { return nullptr; }
 };

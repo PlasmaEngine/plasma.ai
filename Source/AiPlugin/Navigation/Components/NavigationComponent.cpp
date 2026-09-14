@@ -89,6 +89,8 @@ void plAiNavigationComponent::OnSimulationStarted()
   m_uiSkipNextFrames = 3; // 2 are needed to have colliders set up at the start of the scene simulation, 3 just to be save
   m_Steering.m_vPosition = GetOwner()->GetGlobalPosition();
   m_Steering.m_qRotation = GetOwner()->GetGlobalRotation();
+  m_vPreviousPosition = m_Steering.m_vPosition;
+  m_fPreviousTimeStep = 0.0f;
 }
 
 void plAiNavigationComponent::OnDeactivated()
@@ -288,6 +290,24 @@ void plAiNavigationComponent::Update()
   plTransform transform = GetOwner()->GetGlobalTransform();
   const float tDiff = GetWorld()->GetClock().GetTimeDiff().AsFloatInSeconds();
 
+  if (tDiff <= 0.0f)
+    return;
+
+  // Navigation runs before transform propagation. GetLinearVelocity() can return
+  // zero here because the object's transform history belongs to the previous
+  // world update. Measure actual displacement between navigation updates instead.
+  m_Steering.m_vVelocity = plVec3::MakeZero();
+  if (m_fPreviousTimeStep > 0.0f)
+  {
+    m_Steering.m_vVelocity = (transform.m_vPosition - m_vPreviousPosition) / m_fPreviousTimeStep;
+    m_Steering.m_vVelocity.z = 0.0f;
+    // Repositioning must not become momentum on the next navigation step.
+    if (m_Steering.m_vVelocity.GetLengthSquared() > plMath::Square(plMath::Max(20.0f, m_fSpeed * 2.0f)))
+      m_Steering.m_vVelocity.SetZero();
+  }
+  m_vPreviousPosition = transform.m_vPosition;
+  m_fPreviousTimeStep = tDiff;
+
   if (m_State == plAiNavigationComponentState::TraversingLink)
   {
     // steering is frozen while crossing a nav link; either game code moves the character
@@ -413,7 +433,6 @@ void plAiNavigationComponent::Steer(plTransform& transform, float tDiff)
   m_Steering.m_fMaxSpeed = m_fSpeed;
   m_Steering.m_vPosition = GetOwner()->GetGlobalPosition();
   m_Steering.m_qRotation = GetOwner()->GetGlobalRotation();
-  m_Steering.m_vVelocity = GetOwner()->GetLinearVelocity();
   m_Steering.m_fAcceleration = m_fAcceleration;
   m_Steering.m_fDecceleration = m_fDecceleration;
 
@@ -469,7 +488,7 @@ void plAiNavigationComponent::Steer(plTransform& transform, float tDiff)
 
     plAiCrowdAgentState agentState;
     agentState.m_vPosition = transform.m_vPosition;
-    agentState.m_vVelocity = GetOwner()->GetLinearVelocity();
+    agentState.m_vVelocity = m_Steering.m_vVelocity;
     agentState.m_vDesiredVelocity = m_Steering.m_vDesiredVelocity;
     agentState.m_fRadius = m_fAgentRadius;
     agentState.m_fMaxSpeed = m_fSpeed;
