@@ -6,6 +6,8 @@
 #include <AiPlugin/Utils/RcMath.h>
 #include <Core/Interfaces/PhysicsWorldModule.h>
 #include <DetourNavMeshQuery.h>
+#include <Foundation/Serialization/AbstractObjectGraph.h>
+#include <Foundation/Serialization/GraphPatch.h>
 
 // clang-format off
 PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsTestPurpose, 1)
@@ -16,12 +18,26 @@ PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsContextCombine, 1)
   PL_ENUM_CONSTANTS(plAiEqsContextCombine::Min, plAiEqsContextCombine::Max, plAiEqsContextCombine::Average)
 PL_END_STATIC_REFLECTED_ENUM;
 
-PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTest, 1, plRTTINoAllocator)
+PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsFilterCondition, 1)
+  PL_ENUM_CONSTANTS(plAiEqsFilterCondition::LegacyPositiveScore, plAiEqsFilterCondition::IsTrue, plAiEqsFilterCondition::AtLeast, plAiEqsFilterCondition::AtMost, plAiEqsFilterCondition::Between, plAiEqsFilterCondition::Reachable, plAiEqsFilterCondition::DirectPath)
+PL_END_STATIC_REFLECTED_ENUM;
+
+PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsMissingDataPolicy, 1)
+  PL_ENUM_CONSTANTS(plAiEqsMissingDataPolicy::Legacy, plAiEqsMissingDataPolicy::RejectCandidate, plAiEqsMissingDataPolicy::SkipTest, plAiEqsMissingDataPolicy::FailQuery)
+PL_END_STATIC_REFLECTED_ENUM;
+
+PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTest, 2, plRTTINoAllocator)
 {
   PL_BEGIN_PROPERTIES
   {
     PL_ENUM_MEMBER_PROPERTY("Purpose", plAiEqsTestPurpose, m_Purpose),
     PL_MEMBER_PROPERTY("Weight", m_fWeight)->AddAttributes(new plDefaultValueAttribute(1.0f), new plClampValueAttribute(0.0f, 10.0f)),
+    PL_ENUM_MEMBER_PROPERTY("FilterCondition", plAiEqsFilterCondition, m_FilterCondition),
+    PL_MEMBER_PROPERTY("FilterMin", m_fFilterMin),
+    PL_MEMBER_PROPERTY("FilterMax", m_fFilterMax)->AddAttributes(new plDefaultValueAttribute(1.0f)),
+    PL_MEMBER_PROPERTY("InvertFilter", m_bInvertFilter),
+    PL_MEMBER_PROPERTY("InvertScore", m_bInvertScore),
+    PL_ENUM_MEMBER_PROPERTY("MissingDataPolicy", plAiEqsMissingDataPolicy, m_MissingDataPolicy),
   }
   PL_END_PROPERTIES;
 }
@@ -105,6 +121,72 @@ PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTest_PathLength, 1, plRTTIDefaultAllocato
 PL_END_DYNAMIC_REFLECTED_TYPE;
 // clang-format on
 
+class plAiEqsTestPatch_1_2 : public plGraphPatch
+{
+public:
+  plAiEqsTestPatch_1_2()
+    : plGraphPatch("plAiEqsTest", 2)
+  {
+  }
+  void Patch(plGraphPatchContext&, plAbstractObjectGraph*, plAbstractObjectNode* pNode) const override
+  {
+    pNode->AddProperty("MissingDataPolicy", static_cast<plInt64>(plAiEqsMissingDataPolicy::Legacy));
+  }
+};
+static plAiEqsTestPatch_1_2 s_EqsTestPatch;
+
+const char* plAiEqsTestDataName(plAiEqsTestData data)
+{
+  switch (data)
+  {
+    case plAiEqsTestData::Valid:
+      return "valid";
+    case plAiEqsTestData::MissingContext:
+      return "missing context";
+    case plAiEqsTestData::MissingPhysics:
+      return "physics unavailable";
+    case plAiEqsTestData::MissingNavigation:
+      return "navigation unavailable";
+    case plAiEqsTestData::MissingPayload:
+      return "incompatible payload";
+    case plAiEqsTestData::StaleHandle:
+      return "stale handle";
+    default:
+      return "invalid measurement";
+  }
+}
+
+bool plAiEqsTest::PassesFilter(const plAiEqsItem& item) const
+{
+  const float value = item.m_bHasMeasurement ? item.m_fMeasurement : item.m_fRaw;
+  bool passes = false;
+  switch (m_FilterCondition.GetValue())
+  {
+    case plAiEqsFilterCondition::IsTrue:
+      passes = item.m_fRaw >= 0.5f;
+      break;
+    case plAiEqsFilterCondition::AtLeast:
+      passes = value >= m_fFilterMin;
+      break;
+    case plAiEqsFilterCondition::AtMost:
+      passes = value <= m_fFilterMax;
+      break;
+    case plAiEqsFilterCondition::Between:
+      passes = value >= m_fFilterMin && value <= m_fFilterMax;
+      break;
+    case plAiEqsFilterCondition::Reachable:
+      passes = item.m_bReachable;
+      break;
+    case plAiEqsFilterCondition::DirectPath:
+      passes = item.m_bDirectPath;
+      break;
+    default:
+      passes = item.m_fRaw > 0.0f;
+      break;
+  }
+  return m_bInvertFilter ? !passes : passes;
+}
+
 float plAiEqsTrapezoidScore(float fValue, float fFullMin, float fFullMax)
 {
   if (fValue >= fFullMin && fValue <= fFullMax)
@@ -172,17 +254,23 @@ plUInt32 plAiEqsTest_Distance::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAiE
     if (pSlot == nullptr || pSlot->m_Positions.IsEmpty())
     {
       item.m_fRaw = 1.0f; // context unavailable - the test does not discriminate
+      item.m_TestData = plAiEqsTestData::MissingContext;
       continue;
     }
 
     plHybridArray<float, 4> scores;
+    plHybridArray<float, 4> distances;
 
     for (const plVec3& vPos : pSlot->m_Positions)
     {
-      scores.PushBack(plAiEqsTrapezoidScore((item.m_vPosition - vPos).GetAsVec2().GetLength(), m_fBandMin, m_fBandMax));
+      const float distance = (item.m_vPosition - vPos).GetAsVec2().GetLength();
+      distances.PushBack(distance);
+      scores.PushBack(plAiEqsTrapezoidScore(distance, m_fBandMin, m_fBandMax));
     }
 
     item.m_fRaw = Combine(static_cast<plAiEqsContextCombine::Enum>(m_Combine.GetValue()), scores);
+    item.m_fMeasurement = Combine(static_cast<plAiEqsContextCombine::Enum>(m_Combine.GetValue()), distances);
+    item.m_bHasMeasurement = true;
   }
 
   return items.GetCount() - uiFirstItem;
@@ -211,14 +299,22 @@ plUInt32 plAiEqsTest_Direction::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAi
     item.m_fRaw = 1.0f;
 
     if (!bBaseValid)
+    {
+      item.m_TestData = bValid ? plAiEqsTestData::InvalidMeasurement : plAiEqsTestData::MissingContext;
       continue;
+    }
 
     plVec2 vCand = (item.m_vPosition - vFrom).GetAsVec2();
 
     if (vCand.NormalizeIfNotZero(plVec2(1, 0)).Failed())
+    {
+      item.m_TestData = plAiEqsTestData::InvalidMeasurement;
       continue;
+    }
 
     const float fAngle = plMath::ACos(plMath::Clamp(vBase.Dot(vCand), -1.0f, 1.0f)).GetRadian();
+    item.m_fMeasurement = plAngle::MakeFromRadian(fAngle).GetDegree();
+    item.m_bHasMeasurement = true;
     item.m_fRaw = plMath::Max(0.0f, 1.0f - plMath::Abs(fAngle - m_DesiredAngle.GetRadian()) / plMath::Pi<float>());
   }
 
@@ -242,11 +338,22 @@ plUInt32 plAiEqsTest_CoverQuality::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<p
     item.m_fRaw = 1.0f;
 
     if (!item.m_hCover.IsValid() || ref_ctx.m_pTactical == nullptr)
+    {
+      item.m_TestData = plAiEqsTestData::MissingPayload;
       continue; // non-cover items pass
+    }
 
     plAiCoverPoint point;
 
-    if (!ref_ctx.m_pTactical->ResolveCover(item.m_hCover, point) || point.m_Quality.GetValue() < m_MinQuality.GetValue())
+    if (!ref_ctx.m_pTactical->ResolveCover(item.m_hCover, point))
+    {
+      item.m_fRaw = 0.0f;
+      item.m_TestData = plAiEqsTestData::StaleHandle;
+      continue;
+    }
+    item.m_bHasMeasurement = true;
+    item.m_fMeasurement = (point.m_Quality == plAiCoverQuality::High) ? 1.0f : 0.5f;
+    if (point.m_Quality.GetValue() < m_MinQuality.GetValue())
     {
       item.m_fRaw = 0.0f;
     }
@@ -279,13 +386,17 @@ plUInt32 plAiEqsTest_CoverFacing::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<pl
     item.m_fRaw = 1.0f;
 
     if (!bValid || !item.m_hCover.IsValid() || ref_ctx.m_pTactical == nullptr)
+    {
+      item.m_TestData = !bValid ? plAiEqsTestData::MissingContext : plAiEqsTestData::MissingPayload;
       continue; // no context / non-cover items pass
+    }
 
     plAiCoverPoint point;
 
     if (!ref_ctx.m_pTactical->ResolveCover(item.m_hCover, point))
     {
       item.m_fRaw = 0.0f; // stale handle - never pick it
+      item.m_TestData = plAiEqsTestData::StaleHandle;
       continue;
     }
 
@@ -295,8 +406,12 @@ plUInt32 plAiEqsTest_CoverFacing::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<pl
 
     if (vToThreat.NormalizeIfNotZero(plVec2(1, 0)).Succeeded())
     {
-      item.m_fRaw = (point.m_vWallDir.GetAsVec2().Dot(vToThreat) >= m_fMinDot) ? 1.0f : 0.0f;
+      item.m_fMeasurement = point.m_vWallDir.GetAsVec2().Dot(vToThreat);
+      item.m_bHasMeasurement = true;
+      item.m_fRaw = (item.m_fMeasurement >= m_fMinDot) ? 1.0f : 0.0f;
     }
+    else
+      item.m_TestData = plAiEqsTestData::InvalidMeasurement;
   }
 
   return items.GetCount() - uiFirstItem;
@@ -318,7 +433,25 @@ plUInt32 plAiEqsTest_Unclaimed::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAi
     item.m_fRaw = 1.0f;
 
     if (ref_ctx.m_pTactical == nullptr)
+    {
+      item.m_TestData = plAiEqsTestData::MissingPayload;
       continue;
+    }
+
+    if (!item.m_hCover.IsValid() && !item.m_hSmartObject.IsValid())
+    {
+      item.m_TestData = plAiEqsTestData::MissingPayload;
+      continue;
+    }
+    plAiCoverPoint cover;
+    plVec3 position;
+    plComponentHandle component;
+    if ((item.m_hCover.IsValid() && !ref_ctx.m_pTactical->ResolveCover(item.m_hCover, cover)) ||
+        (item.m_hSmartObject.IsValid() && !ref_ctx.m_pTactical->ResolveSmartObject(item.m_hSmartObject, position, component)))
+    {
+      item.m_TestData = plAiEqsTestData::StaleHandle;
+      continue;
+    }
 
     if (item.m_hCover.IsValid() && ref_ctx.m_pTactical->IsCoverClaimedByOther(item.m_hCover, ref_ctx.m_hQuerier))
     {
@@ -355,6 +488,7 @@ plUInt32 plAiEqsTest_LineOfSight::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<pl
     if (!bValid)
     {
       item.m_fRaw = 1.0f;
+      item.m_TestData = (pSlot == nullptr || pSlot->m_Positions.IsEmpty()) ? plAiEqsTestData::MissingContext : plAiEqsTestData::MissingPhysics;
       continue;
     }
 
@@ -409,6 +543,7 @@ plUInt32 plAiEqsTest_ReachableApprox::Run(plAiEqsEvalContext& ref_ctx, plArrayPt
     for (plUInt32 i = uiFirstItem; i < items.GetCount(); ++i)
     {
       items[i].m_fRaw = 1.0f; // querier off the navmesh - do not discriminate
+      items[i].m_TestData = plAiEqsTestData::MissingNavigation;
     }
 
     return items.GetCount() - uiFirstItem;
@@ -431,7 +566,11 @@ plUInt32 plAiEqsTest_ReachableApprox::Run(plAiEqsEvalContext& ref_ctx, plArrayPt
     {
       // t > 1 means the target was reached in a straight walk; a hit means a detour is needed
       item.m_fRaw = (fT > 1.0f) ? 1.0f : 0.25f;
+      item.m_bDirectPath = fT > 1.0f;
+      item.m_bReachable = item.m_bDirectPath; // a detour is not proof of reachability
     }
+    else
+      item.m_TestData = plAiEqsTestData::MissingNavigation;
   }
 
   return items.GetCount() - uiFirstItem;
@@ -453,6 +592,7 @@ plUInt32 plAiEqsTest_PathLength::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plA
     for (plUInt32 i = uiFirstItem; i < items.GetCount(); ++i)
     {
       items[i].m_fRaw = 1.0f; // querier off the navmesh - do not discriminate
+      items[i].m_TestData = plAiEqsTestData::MissingNavigation;
     }
 
     return items.GetCount() - uiFirstItem;
@@ -466,6 +606,8 @@ plUInt32 plAiEqsTest_PathLength::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plA
       return i - uiFirstItem;
 
     item.m_fRaw = 0.0f; // unreachable until proven otherwise
+    item.m_bHasMeasurement = true;
+    item.m_fMeasurement = plMath::MaxValue<float>();
 
     dtPolyRef endRef = 0;
     plRcPos endPos;
@@ -496,6 +638,8 @@ plUInt32 plAiEqsTest_PathLength::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plA
     }
 
     item.m_fRaw = plMath::Max(0.001f, plAiEqsTrapezoidScore(fLength, m_fBandMin, m_fBandMax)); // reachable never hard-fails on distance alone... unless banded to 0
+    item.m_fMeasurement = fLength;
+    item.m_bReachable = true;
   }
 
   return items.GetCount() - uiFirstItem;

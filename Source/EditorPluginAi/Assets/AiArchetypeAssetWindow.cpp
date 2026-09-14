@@ -218,16 +218,17 @@ plQtAiCurveMiniView::plQtAiCurveMiniView(QWidget* pParent)
   setFixedSize(64, 22);
 }
 
-void plQtAiCurveMiniView::SetCurve(const plCurve1D& curve)
+void plQtAiCurveMiniView::SetCurve(const plCurve1D& curve, bool bLegacyDomain)
 {
   m_Curve = curve;
+  m_bLegacyDomain = bLegacyDomain;
   update();
 }
 
 void plQtAiCurveMiniView::paintEvent(QPaintEvent* pEvent)
 {
   QPainter p(this);
-  plAiAssetUi::PaintCurve(p, rect(), &m_Curve, plAiAssetUi::CurveColor());
+  plAiAssetUi::PaintCurve(p, rect(), &m_Curve, plAiAssetUi::CurveColor(), m_bLegacyDomain);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -915,7 +916,7 @@ void plQtAiArchetypeAssetDocumentWindow::RefreshPeek()
     pLabel->setWordWrap(false);
 
     plQtAiCurveMiniView* pCurve = new plQtAiCurveMiniView(pRow);
-    pCurve->SetCurve(cons.m_Curve);
+    pCurve->SetCurve(cons.m_Curve, cons.m_bLegacyCurveDomain);
 
     pRowLayout->addWidget(pLabel, 1);
     pRowLayout->addWidget(pCurve);

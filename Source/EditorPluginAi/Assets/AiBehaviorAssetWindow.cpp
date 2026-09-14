@@ -271,7 +271,17 @@ void plQtAiConsiderationCard::RefreshFromNative(const plAiConsiderationObject* p
       const plDocumentObject* pCurve = pAccessor->GetChildObjectByName(pObject, "ResponseCurve", plVariant());
       if (pCurve != nullptr)
       {
-        m_pCurveButton->UpdatePreview(pAccessor, pCurve, plAiAssetUi::CurveColor(), 0.0, true, 1.0, true, 1.0, 0.0, 1.0);
+        plCurve1D preview;
+        if (pNative != nullptr)
+          plAiAssetUi::BuildRuntimeCurve(pNative->m_ResponseCurve, preview);
+        QPixmap pixmap(plMath::Max(10, m_pCurveButton->width()), 32);
+        QPainter painter(&pixmap);
+        plAiAssetUi::PaintCurve(painter, pixmap.rect(), &preview, plAiAssetUi::CurveColor(), pNative && pNative->m_bLegacyCurveDomain);
+        painter.end();
+        m_pCurveButton->setPixmap(pixmap);
+        m_pCurveButton->setToolTip(pNative && pNative->m_bLegacyCurveDomain
+                                     ? "Legacy curve domain: input 0..1 spans the first to last point. Disable LegacyCurveDomain in Properties to use authored X coordinates."
+                                     : "Input uses authored X coordinates. Values hold flat before the first and after the last point. Empty = identity; one point = constant. Click to edit; right-click for presets.");
       }
     }
   }
@@ -620,7 +630,7 @@ void plQtAiScorePreviewPanel::Recompute()
     plCurve1D curve;
     plAiAssetUi::BuildRuntimeCurve(pCons->m_ResponseCurve, curve);
 
-    const float fOut = plAiAssetUi::EvaluateConsideration(curve, fRaw, row.m_fMin, row.m_fMax);
+    const float fOut = plAiAssetUi::EvaluateConsideration(curve, fRaw, row.m_fMin, row.m_fMax, nullptr, pCons->m_bLegacyCurveDomain);
     factors.PushBack(fOut);
 
     row.m_pRaw->setText(QString::number(fRaw, 'f', 2));

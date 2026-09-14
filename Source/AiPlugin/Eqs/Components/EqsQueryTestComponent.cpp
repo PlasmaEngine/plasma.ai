@@ -193,13 +193,21 @@ void plAiEqsQueryTestComponent::DrawResult()
 
       for (plUInt32 t = 0; t < winner.m_uiRecordedTests; ++t)
       {
-        sBreakdown.AppendFormat("T{}: {}\n", t, plArgF(winner.m_TestScores[t], 2));
+        const auto& trace = winner.m_TestTrace[t];
+        sBreakdown.AppendFormat("T{} {}: value {} raw {} score {} contribution {}\n", t + 1,
+          trace.m_bSkipped ? "skipped" : "pass", plArgF(trace.m_fMeasurement, 2),
+          plArgF(trace.m_fRaw, 2), plArgF(trace.m_fCurved, 2), plArgF(trace.m_fContribution, 2));
       }
 
       sBreakdown.AppendFormat("= {}", plArgF(winner.m_fScore, 2));
 
       plDebugRenderer::Draw3DText(GetWorld(), sBreakdown, winner.m_vPosition + plVec3(0, 0, 1.2f), plColor::MediumSpringGreen);
     }
+  }
+  else if (m_LastResult.m_Status == plAiEqsQueryResult::Status::MissingData)
+  {
+    plDebugRenderer::Draw3DText(GetWorld(), "EQS: missing data (enable AI.EQS.VisualizeScores for details)",
+      GetOwner()->GetGlobalPosition() + plVec3(0, 0, 1.0f), plColor::OrangeRed);
   }
   else if (m_LastResult.m_Status == plAiEqsQueryResult::Status::NoResult)
   {

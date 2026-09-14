@@ -1,4 +1,5 @@
 #include <AiPlugin/AiPluginPCH.h>
+#include <AiPlugin/Utils/AiResponseCurve.h>
 
 #include <AiPlugin/UtilityAI/Decision/AiBehaviorResource.h>
 #include <Foundation/Serialization/ReflectionSerializer.h>
@@ -77,9 +78,7 @@ float plAiConsiderationDesc::Evaluate(const plAiScoringContext& context) const
   if (m_ResponseCurve.IsEmpty())
     return fNormalized;
 
-  const double fPos = m_ResponseCurve.ConvertNormalizedPos(fNormalized);
-  const float fValue = static_cast<float>(m_ResponseCurve.Evaluate(fPos));
-  return plMath::Clamp(fValue, 0.0f, 1.0f);
+  return plAiEvaluateResponseCurve(m_ResponseCurve, fNormalized, m_bLegacyCurveDomain);
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -111,7 +110,7 @@ void plAiBehaviorResourceDescriptor::CollectBlackboardEntries(plDynamicArray<plH
 
 plResult plAiBehaviorResourceDescriptor::Serialize(plStreamWriter& inout_stream) const
 {
-  inout_stream.WriteVersion(1);
+  inout_stream.WriteVersion(2);
 
   inout_stream << m_sName;
   inout_stream << m_Category;
@@ -127,6 +126,7 @@ plResult plAiBehaviorResourceDescriptor::Serialize(plStreamWriter& inout_stream)
     inout_stream << consideration.m_fInputMin;
     inout_stream << consideration.m_fInputMax;
     consideration.m_ResponseCurve.Save(inout_stream);
+    inout_stream << consideration.m_bLegacyCurveDomain;
   }
 
   WriteReflectedObject(inout_stream, m_pLogic.Borrow());
@@ -136,7 +136,7 @@ plResult plAiBehaviorResourceDescriptor::Serialize(plStreamWriter& inout_stream)
 
 plResult plAiBehaviorResourceDescriptor::Deserialize(plStreamReader& inout_stream)
 {
-  inout_stream.ReadVersion(1);
+  const auto version = inout_stream.ReadVersion(2);
 
   inout_stream >> m_sName;
   inout_stream >> m_Category;
@@ -158,6 +158,9 @@ plResult plAiBehaviorResourceDescriptor::Deserialize(plStreamReader& inout_strea
     inout_stream >> consideration.m_fInputMin;
     inout_stream >> consideration.m_fInputMax;
     consideration.m_ResponseCurve.Load(inout_stream);
+    consideration.m_bLegacyCurveDomain = true;
+    if (version >= 2)
+      inout_stream >> consideration.m_bLegacyCurveDomain;
     consideration.PrepareCurve();
   }
 

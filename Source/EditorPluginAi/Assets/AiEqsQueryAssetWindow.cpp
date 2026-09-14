@@ -31,6 +31,7 @@
 #include <QScrollArea>
 #include <QSlider>
 #include <QSpinBox>
+#include <QStandardItemModel>
 #include <QStyle>
 #include <QToolButton>
 
@@ -299,7 +300,9 @@ plQtAiEqsTestCard::plQtAiEqsTestCard(QWidget* pParent, plQtAiEqsQueryAssetDocume
   setProperty("cardSelected", false);
   setCursor(Qt::PointingHandCursor);
 
-  QHBoxLayout* pMain = new QHBoxLayout(this);
+  QVBoxLayout* pCardLayout = new QVBoxLayout(this);
+  QHBoxLayout* pMain = new QHBoxLayout();
+  pCardLayout->addLayout(pMain);
   pMain->setContentsMargins(10, 7, 8, 7);
   pMain->setSpacing(12);
 
@@ -388,6 +391,55 @@ plQtAiEqsTestCard::plQtAiEqsTestCard(QWidget* pParent, plQtAiEqsQueryAssetDocume
     connect(m_pCurveButton, &QWidget::customContextMenuRequested, this, &plQtAiEqsTestCard::onCurveContextMenu);
   }
 
+  QHBoxLayout* pControls = new QHBoxLayout();
+  pCardLayout->addLayout(pControls);
+  m_pCondition = new QComboBox(this);
+  m_pCondition->addItems({"Legacy score > 0", "True", "Value >= Min", "Value <= Max", "Value between Min / Max", "Reachable", "Direct path"});
+  m_pCondition->setToolTip("Numeric filters use native units: distance/path in meters, direction in degrees, facing dot product, or boolean 0/1. Reachable requires Path Length; Direct path requires Reachable Approx.");
+  m_pFilterMin = new QDoubleSpinBox(this);
+  m_pFilterMax = new QDoubleSpinBox(this);
+  for (auto* spin : {m_pFilterMin, m_pFilterMax})
+  {
+    spin->setRange(-1000000, 1000000);
+    spin->setDecimals(3);
+  }
+  m_pFilterMin->setPrefix("Min ");
+  m_pFilterMax->setPrefix("Max ");
+  m_pInvertFilter = new QCheckBox("Invert filter", this);
+  m_pInvertScore = new QCheckBox("Invert score", this);
+  m_pInvertFilter->setToolTip("Negate a valid filter decision. Missing-data handling is independent.");
+  m_pInvertScore->setToolTip("Use 1 - curve(raw). LOS PreferVisible sets the base result before inversion.");
+  pControls->addWidget(m_pCondition);
+  pControls->addWidget(m_pFilterMin);
+  pControls->addWidget(m_pFilterMax);
+  pControls->addWidget(m_pInvertFilter);
+  pControls->addWidget(m_pInvertScore);
+  QHBoxLayout* pDataControls = new QHBoxLayout();
+  pCardLayout->addLayout(pDataControls);
+  pDataControls->addWidget(new QLabel("Missing data", this));
+  m_pMissingData = new QComboBox(this);
+  m_pMissingData->addItems({"Legacy behavior", "Reject candidate", "Skip test", "Fail query"});
+  pDataControls->addWidget(m_pMissingData);
+  pDataControls->addStretch();
+  connect(m_pCondition, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int value)
+    {
+    if (!m_bUpdating) m_pWindow->SetTestProperty(m_ObjectGuid, "FilterCondition", static_cast<plInt64>(value)); });
+  connect(m_pMissingData, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int value)
+    {
+    if (!m_bUpdating) m_pWindow->SetTestProperty(m_ObjectGuid, "MissingDataPolicy", static_cast<plInt64>(value)); });
+  connect(m_pInvertFilter, &QCheckBox::toggled, this, [this](bool value)
+    {
+    if (!m_bUpdating) m_pWindow->SetTestProperty(m_ObjectGuid, "InvertFilter", value); });
+  connect(m_pInvertScore, &QCheckBox::toggled, this, [this](bool value)
+    {
+    if (!m_bUpdating) m_pWindow->SetTestProperty(m_ObjectGuid, "InvertScore", value); });
+  connect(m_pFilterMin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double value)
+    {
+    if (!m_bUpdating) m_pWindow->SetTestProperty(m_ObjectGuid, "FilterMin", static_cast<float>(value)); });
+  connect(m_pFilterMax, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double value)
+    {
+    if (!m_bUpdating) m_pWindow->SetTestProperty(m_ObjectGuid, "FilterMax", static_cast<float>(value)); });
+
   // order / remove
   {
     QVBoxLayout* pOps = new QVBoxLayout();
@@ -430,6 +482,45 @@ void plQtAiEqsTestCard::RefreshFromNative(const plAiEqsTestObject* pNative, plUI
 
   m_pTypeLabel->setText(PrettyEqsName(pTest != nullptr ? pTest->GetDynamicRTTI() : nullptr));
   m_pSummaryLabel->setText(TestSummary(pTest));
+  if (pTest != nullptr)
+  {
+    QString filter;
+    switch (pTest->m_FilterCondition.GetValue())
+    {
+      case plAiEqsFilterCondition::IsTrue:
+        filter = "true";
+        break;
+      case plAiEqsFilterCondition::AtLeast:
+        filter = QString("value >= %1").arg(pTest->m_fFilterMin);
+        break;
+      case plAiEqsFilterCondition::AtMost:
+        filter = QString("value <= %1").arg(pTest->m_fFilterMax);
+        break;
+      case plAiEqsFilterCondition::Between:
+        filter = QString("value in [%1, %2]").arg(pTest->m_fFilterMin).arg(pTest->m_fFilterMax);
+        break;
+      case plAiEqsFilterCondition::Reachable:
+        filter = "reachable";
+        break;
+      case plAiEqsFilterCondition::DirectPath:
+        filter = "direct path";
+        break;
+      default:
+        filter = "raw score > 0";
+        break;
+    }
+    if (pTest->m_Purpose != plAiEqsTestPurpose::ScoreOnly)
+      m_pSummaryLabel->setText(m_pSummaryLabel->text() + "\nRequire " + (pTest->m_bInvertFilter ? "NOT (" + filter + ")" : filter));
+    if (pTest->m_Purpose != plAiEqsTestPurpose::FilterOnly && pTest->m_bInvertScore)
+      m_pSummaryLabel->setText(m_pSummaryLabel->text() + "; score = 1 - curve(raw)");
+  }
+  const plString issue = m_pWindow->GetEqsDocument()->GetProperties()->ValidateTest(uiIndex);
+  if (!issue.IsEmpty())
+    m_pSummaryLabel->setText(m_pSummaryLabel->text() + "\n" + QString::fromUtf8(issue.GetData()));
+  if (pNative && pNative->m_bLegacyCurveDomain)
+    m_pSummaryLabel->setText(m_pSummaryLabel->text() + "\nLegacy curve domain (see Properties to migrate)");
+  m_pSummaryLabel->setWordWrap(true);
+  m_pSummaryLabel->setToolTip(m_pSummaryLabel->text());
 
   if (const char* szContext = ContextChipText(pTest))
   {
@@ -444,6 +535,25 @@ void plQtAiEqsTestCard::RefreshFromNative(const plAiEqsTestObject* pNative, plUI
 
   if (pTest != nullptr)
   {
+    const bool filters = pTest->m_Purpose != plAiEqsTestPurpose::ScoreOnly;
+    m_pCondition->setVisible(filters);
+    m_pCondition->setCurrentIndex(pTest->m_FilterCondition.GetValue());
+    if (auto* model = qobject_cast<QStandardItemModel*>(m_pCondition->model()))
+    {
+      model->item(plAiEqsFilterCondition::Reachable)->setEnabled(plDynamicCast<const plAiEqsTest_PathLength*>(pTest) != nullptr);
+      model->item(plAiEqsFilterCondition::DirectPath)->setEnabled(plDynamicCast<const plAiEqsTest_ReachableApprox*>(pTest) != nullptr);
+    }
+    m_pInvertFilter->setVisible(filters);
+    m_pInvertFilter->setChecked(pTest->m_bInvertFilter);
+    m_pInvertScore->setVisible(pTest->m_Purpose != plAiEqsTestPurpose::FilterOnly);
+    m_pInvertScore->setChecked(pTest->m_bInvertScore);
+    m_pMissingData->setCurrentIndex(pTest->m_MissingDataPolicy.GetValue());
+    m_pFilterMin->setVisible(filters && (pTest->m_FilterCondition == plAiEqsFilterCondition::AtLeast || pTest->m_FilterCondition == plAiEqsFilterCondition::Between));
+    m_pFilterMax->setVisible(filters && (pTest->m_FilterCondition == plAiEqsFilterCondition::AtMost || pTest->m_FilterCondition == plAiEqsFilterCondition::Between));
+    if (!m_pFilterMin->hasFocus())
+      m_pFilterMin->setValue(pTest->m_fFilterMin);
+    if (!m_pFilterMax->hasFocus())
+      m_pFilterMax->setValue(pTest->m_fFilterMax);
     switch (pTest->m_Purpose.GetValue())
     {
       case plAiEqsTestPurpose::FilterOnly:
@@ -489,7 +599,17 @@ void plQtAiEqsTestCard::RefreshFromNative(const plAiEqsTestObject* pNative, plUI
       const plDocumentObject* pCurve = pAccessor->GetChildObjectByName(pObject, "ScoreCurve", plVariant());
       if (pCurve != nullptr)
       {
-        m_pCurveButton->UpdatePreview(pAccessor, pCurve, plAiAssetUi::CurveColor(), 0.0, true, 1.0, true, 1.0, 0.0, 1.0);
+        plCurve1D preview;
+        if (pNative != nullptr)
+          plAiAssetUi::BuildRuntimeCurve(pNative->m_ScoreCurve, preview);
+        QPixmap pixmap(plMath::Max(10, m_pCurveButton->width()), 32);
+        QPainter painter(&pixmap);
+        plAiAssetUi::PaintCurve(painter, pixmap.rect(), &preview, plAiAssetUi::CurveColor(), pNative && pNative->m_bLegacyCurveDomain);
+        painter.end();
+        m_pCurveButton->setPixmap(pixmap);
+        m_pCurveButton->setToolTip(pNative && pNative->m_bLegacyCurveDomain
+                                     ? "Legacy curve domain: input 0..1 spans the first to last point. Disable LegacyCurveDomain in Properties to use authored X coordinates."
+                                     : "Input uses authored X coordinates. Values hold flat before the first and after the last point. Empty = identity; one point = constant. Click to edit; right-click for presets.");
       }
     }
   }
@@ -1239,6 +1359,16 @@ void plQtAiEqsPreviewPanel::Recompute()
 
   m_Candidates.Clear();
 
+  const plString rootIssue = pProps->ValidateRoot();
+  if (!rootIssue.IsEmpty())
+  {
+    m_iSelected = -1;
+    m_pScatter->SetCandidates(m_Candidates, m_iSelected);
+    m_pStats->setText(QString::fromUtf8(rootIssue.GetData()));
+    RefreshBreakdown();
+    return;
+  }
+
   const plVec2 vQuerier = m_pScatter->m_vQuerier;
   const plVec2 vThreat = m_pScatter->m_vThreat;
 
@@ -1381,6 +1511,7 @@ void plQtAiEqsPreviewPanel::Recompute()
   for (auto& cand : m_Candidates)
   {
     cand.m_TestScores.SetCount(static_cast<plUInt32>(pProps->m_Tests.GetCount()), 0.0f);
+    cand.m_TestTrace.SetCount(pProps->m_Tests.GetCount());
   }
 
   plHybridArray<float, 64> scoreSums;
@@ -1388,12 +1519,15 @@ void plQtAiEqsPreviewPanel::Recompute()
   scoreSums.SetCount(m_Candidates.GetCount(), 0.0f);
   weightSums.SetCount(m_Candidates.GetCount(), 0.0f);
 
+  QString stageCounts = QString("%1 generated").arg(m_Candidates.GetCount());
+  bool queryFailed = false;
   for (const OrderedTest& ordered : order)
   {
     const plAiEqsTest* pTest = ordered.m_pObj->m_pTest;
 
-    plCurve1D curve;
-    plAiAssetUi::BuildRuntimeCurve(ordered.m_pObj->m_ScoreCurve, curve);
+    plAiEqsTestDesc processor;
+    plAiAssetUi::BuildRuntimeCurve(ordered.m_pObj->m_ScoreCurve, processor.m_ScoreCurve);
+    processor.m_bLegacyCurveDomain = ordered.m_pObj->m_bLegacyCurveDomain;
 
     for (plUInt32 c = 0; c < m_Candidates.GetCount(); ++c)
     {
@@ -1403,10 +1537,13 @@ void plQtAiEqsPreviewPanel::Recompute()
         continue;
 
       float fRaw = 1.0f;
+      plAiEqsItem item;
 
       if (auto pDist = plDynamicCast<const plAiEqsTest_Distance*>(pTest))
       {
-        fRaw = PreviewTrapezoid((cand.m_vPosition - resolveContext(pDist->GetContext())).GetLength(), pDist->m_fBandMin, pDist->m_fBandMax);
+        item.m_fMeasurement = (cand.m_vPosition - resolveContext(pDist->GetContext())).GetLength();
+        item.m_bHasMeasurement = true;
+        fRaw = PreviewTrapezoid(item.m_fMeasurement, pDist->m_fBandMin, pDist->m_fBandMax);
       }
       else if (auto pDir = plDynamicCast<const plAiEqsTest_Direction*>(pTest))
       {
@@ -1417,18 +1554,26 @@ void plQtAiEqsPreviewPanel::Recompute()
         if (vBase.NormalizeIfNotZero(plVec2(1, 0)).Succeeded() && vCand.NormalizeIfNotZero(plVec2(1, 0)).Succeeded())
         {
           const float fAngle = plMath::ACos(plMath::Clamp(vBase.Dot(vCand), -1.0f, 1.0f)).GetRadian();
+          item.m_fMeasurement = plAngle::MakeFromRadian(fAngle).GetDegree();
+          item.m_bHasMeasurement = true;
           fRaw = plMath::Max(0.0f, 1.0f - plMath::Abs(fAngle - pDir->m_DesiredAngle.GetRadian()) / plMath::Pi<float>());
         }
+        else
+          item.m_TestData = plAiEqsTestData::InvalidMeasurement;
       }
       else if (auto pQuality = plDynamicCast<const plAiEqsTest_CoverQuality*>(pTest))
       {
         if (cand.m_uiPayload == 1)
         {
+          item.m_fMeasurement = cand.m_uiCoverQuality >= 2 ? 1.0f : 0.5f;
+          item.m_bHasMeasurement = true;
           if (cand.m_uiCoverQuality < pQuality->m_MinQuality.GetValue())
             fRaw = 0.0f;
           else
             fRaw = (cand.m_uiCoverQuality >= 2) ? 1.0f : 0.5f;
         }
+        else
+          item.m_TestData = plAiEqsTestData::MissingPayload;
       }
       else if (auto pFacing = plDynamicCast<const plAiEqsTest_CoverFacing*>(pTest))
       {
@@ -1438,13 +1583,21 @@ void plQtAiEqsPreviewPanel::Recompute()
 
           if (vToThreat.NormalizeIfNotZero(plVec2(1, 0)).Succeeded())
           {
-            fRaw = (cand.m_vWallDir.Dot(vToThreat) >= pFacing->m_fMinDot) ? 1.0f : 0.0f;
+            item.m_fMeasurement = cand.m_vWallDir.Dot(vToThreat);
+            item.m_bHasMeasurement = true;
+            fRaw = (item.m_fMeasurement >= pFacing->m_fMinDot) ? 1.0f : 0.0f;
           }
+          else
+            item.m_TestData = plAiEqsTestData::InvalidMeasurement;
         }
+        else
+          item.m_TestData = plAiEqsTestData::MissingPayload;
       }
       else if (plDynamicCast<const plAiEqsTest_Unclaimed*>(pTest) != nullptr)
       {
         fRaw = 1.0f; // everything is unclaimed in the local simulation
+        if (cand.m_uiPayload != 1 && cand.m_uiPayload != 2)
+          item.m_TestData = plAiEqsTestData::MissingPayload;
       }
       else if (auto pLos = plDynamicCast<const plAiEqsTest_LineOfSight*>(pTest))
       {
@@ -1455,36 +1608,56 @@ void plQtAiEqsPreviewPanel::Recompute()
       else if (plDynamicCast<const plAiEqsTest_ReachableApprox*>(pTest) != nullptr)
       {
         fRaw = 1.0f; // no navmesh locally
+        item.m_bDirectPath = true;
+        item.m_bReachable = true;
       }
       else if (auto pPath = plDynamicCast<const plAiEqsTest_PathLength*>(pTest))
       {
         // approximate: euclidean distance with a detour factor
-        fRaw = plMath::Max(0.001f, PreviewTrapezoid((cand.m_vPosition - vQuerier).GetLength() * 1.15f, pPath->m_fBandMin, pPath->m_fBandMax));
+        item.m_fMeasurement = (cand.m_vPosition - vQuerier).GetLength() * 1.15f;
+        item.m_bHasMeasurement = true;
+        item.m_bReachable = true;
+        fRaw = plMath::Max(0.001f, PreviewTrapezoid(item.m_fMeasurement, pPath->m_fBandMin, pPath->m_fBandMax));
       }
+      else
+        item.m_TestData = plAiEqsTestData::InvalidMeasurement; // custom tests need a runtime preview
 
-      const float fCurved = plAiAssetUi::EvaluateConsideration(curve, fRaw, 0.0f, 1.0f);
-
-      cand.m_TestScores[ordered.m_uiRowIndex] = fCurved;
-
-      const auto purpose = static_cast<plAiEqsTestPurpose::Enum>(pTest->m_Purpose.GetValue());
-
-      if (plAiEqsTestPurpose::Filters(purpose) && fRaw <= 0.0f)
+      if (const char* context = pTest->GetContextProperty())
       {
-        cand.m_bDiscarded = true;
-        continue;
+        if (!pProps->HasContext(context))
+          item.m_TestData = plAiEqsTestData::MissingContext;
       }
-
-      if (plAiEqsTestPurpose::Scores(purpose))
+      item.m_fRaw = fRaw;
+      // Use slot zero for the temporary item's trace; editor rows have no 12-test limit.
+      const bool success = processor.ProcessItem(*pTest, item, 0);
+      cand.m_TestScores[ordered.m_uiRowIndex] = item.m_TestScores[0];
+      cand.m_TestTrace[ordered.m_uiRowIndex] = item.m_TestTrace[0];
+      cand.m_bDiscarded = item.m_bDiscarded;
+      scoreSums[c] += item.m_fScoreSum;
+      weightSums[c] += item.m_fWeightSum;
+      if (!success)
       {
-        scoreSums[c] += pTest->m_fWeight * fCurved;
-        weightSums[c] += pTest->m_fWeight;
+        queryFailed = true;
+        break;
       }
+    }
+    plUInt32 surviving = 0;
+    for (const auto& candidate : m_Candidates)
+      surviving += candidate.m_bDiscarded ? 0 : 1;
+    stageCounts += QString(" -> T%1: %2").arg(ordered.m_uiRowIndex + 1).arg(surviving);
+    if (queryFailed)
+    {
+      stageCounts += " (query failed: missing data)";
+      for (auto& candidate : m_Candidates)
+        candidate.m_bDiscarded = true;
+      break;
     }
   }
 
   // ---- finalize ----
 
   plUInt32 uiSurvivors = 0;
+  plUInt32 uiPositiveResults = 0;
   plInt32 iWinner = -1;
   float fBest = -1.0f;
 
@@ -1497,6 +1670,10 @@ void plQtAiEqsPreviewPanel::Recompute()
 
     ++uiSurvivors;
     cand.m_fFinal = (weightSums[c] > 0.0f) ? (scoreSums[c] / weightSums[c]) : 1.0f;
+
+    if (cand.m_fFinal <= 0.0f)
+      continue; // runtime omits zero-score results even when all filters passed
+    ++uiPositiveResults;
 
     if (cand.m_fFinal > fBest)
     {
@@ -1517,11 +1694,13 @@ void plQtAiEqsPreviewPanel::Recompute()
 
   m_pScatter->SetCandidates(m_Candidates, m_iSelected);
 
-  const plUInt32 uiResults = plMath::Min<plUInt32>(uiSurvivors, pProps->m_uiMaxResults);
+  const plUInt32 uiResultLimit = plMath::Clamp<plUInt32>(pProps->m_uiMaxResults, 1, pProps->m_RunMode == plAiEqsRunMode::SingleBest ? 8 : 16);
+  const plUInt32 uiResults = plMath::Min<plUInt32>(uiPositiveResults, uiResultLimit);
   m_pStats->setText(QString("generated %1 \xC2\xB7 after filters %2 \xC2\xB7 results %3\nlocal simulation \xC2\xB7 LOS via draggable occluder \xC2\xB7 navmesh tests approximated")
                       .arg(uiGenerated)
                       .arg(uiSurvivors)
-                      .arg(uiResults));
+                      .arg(uiResults) +
+                    "\n" + stageCounts + "\n" + QString::fromUtf8(pProps->ValidateRoot().GetData()));
 
   RefreshBreakdown();
 }
@@ -1561,13 +1740,20 @@ void plQtAiEqsPreviewPanel::RefreshBreakdown()
     {
       row.m_pValue->setText("-");
     }
-    else if (bScores)
-    {
-      row.m_pValue->setText(QString::fromUtf8("%1 \xC3\x97%2").arg(fScore, 0, 'f', 2).arg(pTest->m_fWeight, 0, 'f', 1));
-    }
     else
     {
-      row.m_pValue->setText(fScore > 0.0f ? "pass" : "fail");
+      const auto& trace = pSelected->m_TestTrace[uiRow];
+      const QString state = !trace.m_bEvaluated ? "not run" : (trace.m_bSkipped ? "skipped" : (trace.m_bPassed ? "pass" : "rejected"));
+      row.m_pValue->setText(state + (bScores && trace.m_bEvaluated ? QString(" %1").arg(trace.m_fCurved, 0, 'f', 2) : QString()));
+      const QString detail = QString("%1: %2\nMeasurement: %3\nRaw score: %4\nCurve/inversion: %5\nWeighted contribution: %6")
+                               .arg(state)
+                               .arg(plAiEqsTestDataName(trace.m_Data))
+                               .arg(trace.m_fMeasurement)
+                               .arg(trace.m_fRaw)
+                               .arg(trace.m_fCurved)
+                               .arg(trace.m_fContribution);
+      row.m_pValue->setToolTip(detail);
+      row.m_pName->setToolTip(detail);
     }
 
     ++uiRow;
@@ -2114,6 +2300,11 @@ void plQtAiEqsQueryAssetDocumentWindow::MoveTest(const plUuid& guid, plInt32 iDi
 
 void plQtAiEqsQueryAssetDocumentWindow::SetTestWeight(const plUuid& guid, double fValue)
 {
+  SetTestProperty(guid, "Weight", static_cast<float>(fValue));
+}
+
+void plQtAiEqsQueryAssetDocumentWindow::SetTestProperty(const plUuid& guid, const char* szProperty, const plVariant& value)
+{
   if (m_bUpdatingUi)
     return;
 
@@ -2126,9 +2317,9 @@ void plQtAiEqsQueryAssetDocumentWindow::SetTestWeight(const plUuid& guid, double
   if (pTest == nullptr)
     return;
 
-  pAccessor->StartTransaction("Change Test Weight");
+  pAccessor->StartTransaction("Change EQS Test");
 
-  if (pAccessor->SetValueByName(pTest, "Weight", plVariant(static_cast<float>(fValue))).Failed())
+  if (pAccessor->SetValueByName(pTest, szProperty, value).Failed())
   {
     pAccessor->CancelTransaction();
   }

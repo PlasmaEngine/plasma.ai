@@ -4,6 +4,7 @@
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
 
 #include <AiPlugin/UtilityAI/Decision/AiInput.h>
+#include <AiPlugin/Utils/AiResponseCurve.h>
 #include <EditorFramework/Assets/AssetCurator.h>
 #include <Foundation/IO/FileSystem/FileReader.h>
 #include <Foundation/IO/OSFile.h>
@@ -191,7 +192,7 @@ namespace plAiAssetUi
     out_curve.CreateLinearApproximation();
   }
 
-  float EvaluateConsideration(const plCurve1D& curve, float fRaw, float fMin, float fMax, float* out_pNormalized)
+  float EvaluateConsideration(const plCurve1D& curve, float fRaw, float fMin, float fMax, float* out_pNormalized, bool bLegacyDomain)
   {
     const float fRange = fMax - fMin;
     float fNormalized = (plMath::Abs(fRange) < plMath::SmallEpsilon<float>()) ? 0.0f : (fRaw - fMin) / fRange;
@@ -203,9 +204,7 @@ namespace plAiAssetUi
     if (curve.IsEmpty())
       return fNormalized;
 
-    const double fPos = curve.ConvertNormalizedPos(fNormalized);
-    const float fValue = static_cast<float>(curve.Evaluate(fPos));
-    return plMath::Clamp(fValue, 0.0f, 1.0f);
+    return plAiEvaluateResponseCurve(curve, fNormalized, bLegacyDomain);
   }
 
   float ComposeUtility(plArrayPtr<const float> considerationValues, float fWeight, float fWeightScale)
@@ -234,7 +233,7 @@ namespace plAiAssetUi
     return plMath::Clamp(fScore, 0.0f, 1.0f);
   }
 
-  void PaintCurve(QPainter& p, const QRectF& rect, const plCurve1D* pCurve, const QColor& curveColor)
+  void PaintCurve(QPainter& p, const QRectF& rect, const plCurve1D* pCurve, const QColor& curveColor, bool bLegacyDomain)
   {
     p.save();
     p.setRenderHint(QPainter::Antialiasing, true);
@@ -260,7 +259,7 @@ namespace plAiAssetUi
 
       if (pCurve != nullptr && !pCurve->IsEmpty())
       {
-        fValue = plMath::Clamp(pCurve->Evaluate(pCurve->ConvertNormalizedPos(t)), 0.0, 1.0);
+        fValue = plAiEvaluateResponseCurve(*pCurve, static_cast<float>(t), bLegacyDomain);
       }
 
       const QPointF pt(inner.left() + t * inner.width(), inner.bottom() - fValue * inner.height());
@@ -378,6 +377,7 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
     auto& out = peek.m_Considerations.ExpandAndGetRef();
     out.m_fInputMin = pCons->m_fInputMin;
     out.m_fInputMax = pCons->m_fInputMax;
+    out.m_bLegacyCurveDomain = pCons->m_bLegacyCurveDomain;
 
     if (pCons->m_pInput != nullptr)
     {

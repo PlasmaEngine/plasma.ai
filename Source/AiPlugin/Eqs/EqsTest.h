@@ -5,7 +5,7 @@
 /// \brief Base class of all EQS tests: filters and/or scores every candidate item.
 ///
 /// A test computes a raw [0,1] value per item (written to plAiEqsItem::m_fRaw). The module then
-/// applies the test's purpose (a hard filter discards items at raw 0), response curve and weight -
+/// applies missing-data handling, the filter condition, response curve, inversion and weight -
 /// the item's final score is the weight-normalized sum over all scoring tests, exactly like the
 /// tactical candidate set today.
 ///
@@ -41,6 +41,15 @@ public:
 
   plEnum<plAiEqsTestPurpose> m_Purpose;
   float m_fWeight = 1.0f;
+  plEnum<plAiEqsFilterCondition> m_FilterCondition;
+  float m_fFilterMin = 0.0f;
+  float m_fFilterMax = 1.0f;
+  bool m_bInvertFilter = false;
+  bool m_bInvertScore = false;
+  plEnum<plAiEqsMissingDataPolicy> m_MissingDataPolicy;
+
+  /// Numeric conditions use native measurements; legacy filtering uses the normalized score.
+  bool PassesFilter(const plAiEqsItem& item) const;
 };
 
 /// \brief 2D distance from each item to a context, scored as a trapezoid band:
@@ -85,7 +94,7 @@ public:
 };
 
 /// \brief Cover payload quality: 0 below MinQuality, otherwise scored by tier (Low 0.5, High 1).
-/// Items without a cover payload pass with 1.
+/// Items without a cover payload use the missing-data policy (legacy mode passes with 1).
 class PL_AIPLUGIN_DLL plAiEqsTest_CoverQuality : public plAiEqsTest
 {
   PL_ADD_DYNAMIC_REFLECTION(plAiEqsTest_CoverQuality, plAiEqsTest);
@@ -99,7 +108,7 @@ public:
 };
 
 /// \brief The cover payload's wall must face the context (the wall is between us and them).
-/// Items without a cover payload pass.
+/// Items without a cover payload use the missing-data policy.
 class PL_AIPLUGIN_DLL plAiEqsTest_CoverFacing : public plAiEqsTest
 {
   PL_ADD_DYNAMIC_REFLECTION(plAiEqsTest_CoverFacing, plAiEqsTest);
@@ -118,7 +127,7 @@ public:
 };
 
 /// \brief Cover/smart-object payload must not be claimed by another agent (the querier's own
-/// claim passes). Items without a claimable payload pass.
+/// claim passes). Items without a claimable payload use the missing-data policy.
 class PL_AIPLUGIN_DLL plAiEqsTest_Unclaimed : public plAiEqsTest
 {
   PL_ADD_DYNAMIC_REFLECTION(plAiEqsTest_Unclaimed, plAiEqsTest);

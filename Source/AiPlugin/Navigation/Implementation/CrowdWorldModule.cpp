@@ -175,7 +175,7 @@ void plAiCrowdWorldModule::UpdateSolve(const UpdateContext& context)
     }
   }
 
-  if (m_SolveList.GetCount() >= 2)
+  if (!m_SolveList.IsEmpty())
   {
     // group agents of the same navmesh so the per-scratch nav queries rarely re-init
     m_SolveList.Sort([this](AgentID lhs, AgentID rhs) {
@@ -350,37 +350,45 @@ void plAiCrowdWorldModule::SolveAgent(plUInt32 uiSolveIndex, plUInt32 uiScratchI
       slot.m_pBoundaryNavMesh = state.m_pNavMesh;
     }
 
-    dtObstacleAvoidanceQuery* pAvoidance = scratch.m_pAvoidance;
-    pAvoidance->reset();
-
-    for (plUInt32 i = 0; i < uiNumNeighbors; ++i)
+    if (uiNumNeighbors == 0 && slot.m_Boundary.getSegmentCount() == 0)
     {
-      const plAiCrowdAgentState& nstate = m_Slots[neighbors[i].m_ID].m_State;
-      pAvoidance->addCircle(plRcPos(nstate.m_vPosition), nstate.m_fRadius, plRcPos(nstate.m_vVelocity), plRcPos(nstate.m_vDesiredVelocity));
-    }
-
-    for (int i = 0; i < slot.m_Boundary.getSegmentCount(); ++i)
-    {
-      const float* pSegment = slot.m_Boundary.getSegment(i);
-      pAvoidance->addSegment(pSegment, pSegment + 3);
-    }
-
-    float navVelocity[3];
-    const dtObstacleAvoidanceParams& params = m_AvoidanceParams[quality];
-
-    if (quality == plAiCrowdAvoidanceQuality::High)
-    {
-      pAvoidance->sampleVelocityAdaptive(plRcPos(state.m_vPosition), state.m_fRadius, state.m_fMaxSpeed,
-        plRcPos(state.m_vVelocity), plRcPos(state.m_vDesiredVelocity), navVelocity, &params, nullptr);
+      // nothing to avoid: pass the desired velocity through exactly instead of sampling it
+      vNewVelocity.z = 0.0f;
     }
     else
     {
-      pAvoidance->sampleVelocityGrid(plRcPos(state.m_vPosition), state.m_fRadius, state.m_fMaxSpeed,
-        plRcPos(state.m_vVelocity), plRcPos(state.m_vDesiredVelocity), navVelocity, &params, nullptr);
-    }
+      dtObstacleAvoidanceQuery* pAvoidance = scratch.m_pAvoidance;
+      pAvoidance->reset();
 
-    vNewVelocity = plRcPos(navVelocity);
-    vNewVelocity.z = 0.0f;
+      for (plUInt32 i = 0; i < uiNumNeighbors; ++i)
+      {
+        const plAiCrowdAgentState& nstate = m_Slots[neighbors[i].m_ID].m_State;
+        pAvoidance->addCircle(plRcPos(nstate.m_vPosition), nstate.m_fRadius, plRcPos(nstate.m_vVelocity), plRcPos(nstate.m_vDesiredVelocity));
+      }
+
+      for (int i = 0; i < slot.m_Boundary.getSegmentCount(); ++i)
+      {
+        const float* pSegment = slot.m_Boundary.getSegment(i);
+        pAvoidance->addSegment(pSegment, pSegment + 3);
+      }
+
+      float navVelocity[3];
+      const dtObstacleAvoidanceParams& params = m_AvoidanceParams[quality];
+
+      if (quality == plAiCrowdAvoidanceQuality::High)
+      {
+        pAvoidance->sampleVelocityAdaptive(plRcPos(state.m_vPosition), state.m_fRadius, state.m_fMaxSpeed,
+          plRcPos(state.m_vVelocity), plRcPos(state.m_vDesiredVelocity), navVelocity, &params, nullptr);
+      }
+      else
+      {
+        pAvoidance->sampleVelocityGrid(plRcPos(state.m_vPosition), state.m_fRadius, state.m_fMaxSpeed,
+          plRcPos(state.m_vVelocity), plRcPos(state.m_vDesiredVelocity), navVelocity, &params, nullptr);
+      }
+
+      vNewVelocity = plRcPos(navVelocity);
+      vNewVelocity.z = 0.0f;
+    }
   }
 
   m_Results[uiWriteBuffer][id] = {vNewVelocity, m_uiFrameCounter};

@@ -60,7 +60,7 @@ using plAiNavigationComponentManager = plComponentManagerSimple<class plAiNaviga
 ///   * The state reporting is still limited, there is no distinction between failure states (invalid start position, target position, partial path)
 ///   * The 'destination reached' implementation is quite hacky.
 ///   * There is no way to stop navigating, but come to a stop smoothly (slowing down).
-///   * There is no avoidance of dynamic obstacles (other creatures) whatsoever. They will just pass through each other.
+///   * Crowd avoidance only changes the steered position, so PhysicsCharacter movement does not avoid other agents.
 ///   * It is not designed to be pushed around dynamically. There is no physics character controller use to prevent it from being pushed into walls.
 ///   * If it somehow leaves the navmesh area, it just fails, there is no recovery mechanism.
 class PL_AIPLUGIN_DLL plAiNavigationComponent : public plComponent
@@ -168,6 +168,7 @@ protected:
 
   plAiCrowdWorldModule* m_pCrowdModule = nullptr;
   plAiCrowdWorldModule::AgentID m_CrowdAgentID = plAiCrowdWorldModule::InvalidAgentID;
+  plVec3 m_vCrowdVelocity = plVec3::MakeZero(); ///< Avoidance velocity, approaches the solved velocity within the acceleration limits.
 
   // nav link traversal state
   plVec3 m_vLinkStart = plVec3::MakeZero();

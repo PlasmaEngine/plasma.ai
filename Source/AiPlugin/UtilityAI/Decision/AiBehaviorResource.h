@@ -17,6 +17,7 @@ struct PL_AIPLUGIN_DLL plAiConsiderationDesc
   float m_fInputMin = 0.0f;
   float m_fInputMax = 1.0f;
   plCurve1D m_ResponseCurve;
+  bool m_bLegacyCurveDomain = false; ///< Compatibility: map input onto the first-to-last point interval.
 
   /// \brief Sorts control points and builds the linear approximation. Must be called once after filling the curve.
   void PrepareCurve();

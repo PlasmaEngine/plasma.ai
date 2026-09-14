@@ -56,7 +56,7 @@ private:
     plHybridArray<plAiEqsResolvedSlot, 4> m_ResolvedSlots; // [0] = Querier
     plDynamicArray<plAiEqsItem> m_PreCollected;            // main-thread generator collection
     plDynamicArray<plAiEqsItem> m_Items;
-    plDynamicArray<plVec3> m_DiscardedDebug;               // positions of filtered-out items (visualization)
+    plDynamicArray<plAiEqsItem> m_DiscardedDebug; // bounded by the query's candidate limit
 
     plVec3 m_vQuerier = plVec3::MakeZero();
     plAiNavMesh* m_pNavMesh = nullptr;
@@ -74,6 +74,8 @@ private:
     plUInt16 m_uiItemCursor = 0; // resume index within the current test
 
     plTime m_CompletedAt;
+    plTime m_SubmittedAt;
+    plStringBuilder m_StageSummary;
     plUInt8 m_uiGeneration = 0;
     bool m_bInUse = false;
   };
@@ -117,8 +119,12 @@ private:
     plTime m_Expiry;
     plVec3 m_vQuerier;
     plHybridArray<plAiEqsQueryResult::Candidate, 16> m_TopN;
-    plHybridArray<plVec3, 32> m_Discarded;
+    plHybridArray<plAiEqsItem, 32> m_Discarded;
     plString m_sName;
+    plString m_sStageSummary;
+    plTime m_SubmittedAt;
+    plHybridArray<plAiEqsResolvedSlot, 4> m_Contexts;
+    plHybridArray<plString, 12> m_TestNames;
   };
 
   plDeque<DebugQuery> m_DebugQueries;

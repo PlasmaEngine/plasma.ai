@@ -1,14 +1,16 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
+#include <Foundation/Serialization/GraphPatch.h>
 #include <Foundation/Serialization/ReflectionSerializer.h>
 
 // clang-format off
-PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiConsiderationObject, 1, plRTTIDefaultAllocator<plAiConsiderationObject>)
+PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiConsiderationObject, 2, plRTTIDefaultAllocator<plAiConsiderationObject>)
 {
   PL_BEGIN_PROPERTIES
   {
     PL_MEMBER_PROPERTY("Input", m_pInput)->AddFlags(plPropertyFlags::PointerOwner),
+    PL_MEMBER_PROPERTY("LegacyCurveDomain", m_bLegacyCurveDomain),
     PL_MEMBER_PROPERTY("InputMin", m_fInputMin),
     PL_MEMBER_PROPERTY("InputMax", m_fInputMax)->AddAttributes(new plDefaultValueAttribute(1.0f)),
     PL_MEMBER_PROPERTY("ResponseCurve", m_ResponseCurve)->AddAttributes(new plCurveExtentsAttribute(0.0f, true, 1.0f, true), new plClampValueAttribute(0.0, 1.0), new plDefaultValueAttribute(1.0)),
@@ -38,6 +40,21 @@ PL_END_DYNAMIC_REFLECTED_TYPE;
 // clang-format on
 
 plAiConsiderationObject::plAiConsiderationObject() = default;
+
+// Preserve authored version-1 curves without modifying their control points.
+class plAiConsiderationObjectPatch_1_2 : public plGraphPatch
+{
+public:
+  plAiConsiderationObjectPatch_1_2()
+    : plGraphPatch("plAiConsiderationObject", 2)
+  {
+  }
+  void Patch(plGraphPatchContext&, plAbstractObjectGraph*, plAbstractObjectNode* pNode) const override
+  {
+    pNode->AddProperty("LegacyCurveDomain", true);
+  }
+};
+static plAiConsiderationObjectPatch_1_2 s_plAiConsiderationObjectPatch;
 
 plAiConsiderationObject::~plAiConsiderationObject()
 {
@@ -117,6 +134,7 @@ plStatus plAiBehaviorAssetDocument::WriteAsset(plStreamWriter& inout_stream, con
     considerationDesc.m_fInputMin = pConsideration->m_fInputMin;
     considerationDesc.m_fInputMax = pConsideration->m_fInputMax;
     pConsideration->m_ResponseCurve.ConvertToRuntimeData(considerationDesc.m_ResponseCurve);
+    considerationDesc.m_bLegacyCurveDomain = pConsideration->m_bLegacyCurveDomain;
   }
 
   desc.m_pLogic = CloneReflected(pProp->m_pLogic);

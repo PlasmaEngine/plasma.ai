@@ -1,5 +1,6 @@
 #pragma once
 
+#include <AiPlugin/Eqs/EqsTypes.h>
 #include <EditorPluginAi/Assets/AiAssetWindow.moc.h>
 
 #include <Foundation/Containers/HybridArray.h>
@@ -88,6 +89,12 @@ private:
   QToolButton* m_pUp = nullptr;
   QToolButton* m_pDown = nullptr;
   QToolButton* m_pRemove = nullptr;
+  QComboBox* m_pCondition = nullptr;
+  QComboBox* m_pMissingData = nullptr;
+  QDoubleSpinBox* m_pFilterMin = nullptr;
+  QDoubleSpinBox* m_pFilterMax = nullptr;
+  QCheckBox* m_pInvertFilter = nullptr;
+  QCheckBox* m_pInvertScore = nullptr;
 };
 
 /// \brief The generator card: type, payload chip, center context and radius band.
@@ -147,6 +154,7 @@ struct plAiEqsPreviewCandidate
   plUInt8 m_uiPayload = 0;                 ///< plAiEqsPayloadType
   plUInt8 m_uiCoverQuality = 0;            ///< synthetic plAiCoverQuality
   plHybridArray<float, 12> m_TestScores;   ///< curved per-test scores
+  plHybridArray<plAiEqsTestTrace, 12> m_TestTrace;
   float m_fFinal = 0.0f;
   bool m_bDiscarded = false;
   bool m_bWinner = false;
@@ -257,6 +265,7 @@ public:
   void RemoveTest(const plUuid& guid);
   void MoveTest(const plUuid& guid, plInt32 iDirection);
   void SetTestWeight(const plUuid& guid, double fValue);
+  void SetTestProperty(const plUuid& guid, const char* szProperty, const plVariant& value);
   void OpenCurveEditor(const plUuid& guid);
   void ApplyCurvePreset(const plUuid& guid, plUInt32 uiPreset);
   void SelectGenerator();

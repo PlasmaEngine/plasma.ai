@@ -57,9 +57,9 @@ struct PL_AIPLUGIN_DLL plAiEqsTestPurpose
 
   enum Enum
   {
-    FilterOnly,     ///< items with a raw score of 0 are discarded; no score contribution
+    FilterOnly,     ///< apply the filter condition; no score contribution
     ScoreOnly,      ///< contributes weight * curve(raw) to the item's score
-    FilterAndScore, ///< both: discard at raw 0, otherwise score
+    FilterAndScore, ///< apply the filter condition, then score survivors
 
     Default = FilterAndScore
   };
@@ -87,6 +87,62 @@ struct PL_AIPLUGIN_DLL plAiEqsContextCombine
 
 PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiEqsContextCombine);
 
+struct PL_AIPLUGIN_DLL plAiEqsFilterCondition
+{
+  using StorageType = plUInt8;
+  enum Enum
+  {
+    LegacyPositiveScore,
+    IsTrue,
+    AtLeast,
+    AtMost,
+    Between,
+    Reachable,
+    DirectPath,
+    Default = LegacyPositiveScore
+  };
+};
+PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiEqsFilterCondition);
+
+struct PL_AIPLUGIN_DLL plAiEqsMissingDataPolicy
+{
+  using StorageType = plUInt8;
+  enum Enum
+  {
+    Legacy,
+    RejectCandidate,
+    SkipTest,
+    FailQuery,
+    Default = RejectCandidate
+  };
+};
+PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiEqsMissingDataPolicy);
+
+enum class plAiEqsTestData : plUInt8
+{
+  Valid,
+  MissingContext,
+  MissingPhysics,
+  MissingNavigation,
+  MissingPayload,
+  StaleHandle,
+  InvalidMeasurement
+};
+
+struct PL_AIPLUGIN_DLL plAiEqsTestTrace
+{
+  float m_fMeasurement = 0;
+  float m_fRaw = 0;
+  float m_fCurved = 0;
+  float m_fContribution = 0;
+  plAiEqsTestData m_Data = plAiEqsTestData::Valid;
+  bool m_bEvaluated = false;
+  bool m_bPassed = true;
+  bool m_bSkipped = false;
+};
+
+PL_AIPLUGIN_DLL const char* plAiEqsTestDataName(plAiEqsTestData data);
+
 /// \brief One candidate of an EQS query: a position plus optional payload and scoring state.
 struct PL_AIPLUGIN_DLL plAiEqsItem
 {
@@ -101,12 +157,19 @@ struct PL_AIPLUGIN_DLL plAiEqsItem
   plEnum<plAiEqsPayloadType> m_Payload;
 
   float m_fRaw = 0.0f; ///< scratch: the current test's raw [0,1] result for this item
+  float m_fMeasurement = 0.0f; ///< native units (meters, degrees, dot product or boolean)
+  bool m_bHasMeasurement = false;
+  bool m_bReachable = false;
+  bool m_bDirectPath = false;
+  plAiEqsTestData m_TestData = plAiEqsTestData::Valid;
+  plUInt16 m_uiRejectedBy = 0xFFFF;
   float m_fScoreSum = 0.0f;
   float m_fWeightSum = 0.0f;
   float m_fFinal = 0.0f;
   bool m_bDiscarded = false;
 
   float m_TestScores[MaxRecordedTests] = {}; ///< curved per-test scores (score breakdown debugging)
+  plAiEqsTestTrace m_TestTrace[MaxRecordedTests];
 };
 
 /// \brief One resolved context slot: world positions / objects snapshotted at submit time.
@@ -151,6 +214,7 @@ struct PL_AIPLUGIN_DLL plAiEqsQueryResult
     Ready,        ///< m_TopN holds at least one candidate, best first
     NoResult,     ///< executed, but no candidate survived the filters
     AreaNotReady, ///< navmesh sectors not loaded yet (they have been requested; retry shortly)
+    MissingData,  ///< a test's FailQuery policy encountered unavailable data
   };
 
   Status m_Status = Status::Invalid;
@@ -167,6 +231,7 @@ struct PL_AIPLUGIN_DLL plAiEqsQueryResult
 
     plUInt8 m_uiRecordedTests = 0;
     float m_TestScores[plAiEqsItem::MaxRecordedTests] = {}; ///< curved per-test scores (score breakdown)
+    plAiEqsTestTrace m_TestTrace[plAiEqsItem::MaxRecordedTests];
   };
 
   plHybridArray<Candidate, 8> m_TopN; ///< [0] = best

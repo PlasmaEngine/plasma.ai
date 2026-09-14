@@ -1,6 +1,7 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Assets/AiEqsQueryAsset.h>
+#include <Foundation/Serialization/GraphPatch.h>
 #include <Foundation/Serialization/ReflectionSerializer.h>
 
 // clang-format off
@@ -15,11 +16,12 @@ PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsContextSlotObject, 1, plRTTIDefaultAlloca
 }
 PL_END_DYNAMIC_REFLECTED_TYPE;
 
-PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTestObject, 1, plRTTIDefaultAllocator<plAiEqsTestObject>)
+PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTestObject, 2, plRTTIDefaultAllocator<plAiEqsTestObject>)
 {
   PL_BEGIN_PROPERTIES
   {
     PL_MEMBER_PROPERTY("Test", m_pTest)->AddFlags(plPropertyFlags::PointerOwner),
+    PL_MEMBER_PROPERTY("LegacyCurveDomain", m_bLegacyCurveDomain),
     PL_MEMBER_PROPERTY("ScoreCurve", m_ScoreCurve)->AddAttributes(new plCurveExtentsAttribute(0.0f, true, 1.0f, true), new plClampValueAttribute(0.0, 1.0), new plDefaultValueAttribute(1.0)),
   }
   PL_END_PROPERTIES;
@@ -62,6 +64,21 @@ plAiEqsContextSlotObject::~plAiEqsContextSlotObject()
 
 plAiEqsTestObject::plAiEqsTestObject() = default;
 
+// Preserve authored version-1 curves without modifying their control points.
+class plAiEqsTestObjectPatch_1_2 : public plGraphPatch
+{
+public:
+  plAiEqsTestObjectPatch_1_2()
+    : plGraphPatch("plAiEqsTestObject", 2)
+  {
+  }
+  void Patch(plGraphPatchContext&, plAbstractObjectGraph*, plAbstractObjectNode* pNode) const override
+  {
+    pNode->AddProperty("LegacyCurveDomain", true);
+  }
+};
+static plAiEqsTestObjectPatch_1_2 s_plAiEqsTestObjectPatch;
+
 plAiEqsTestObject::~plAiEqsTestObject()
 {
   if (m_pTest != nullptr)
@@ -72,6 +89,85 @@ plAiEqsTestObject::~plAiEqsTestObject()
 }
 
 plAiEqsQueryAssetObject::plAiEqsQueryAssetObject() = default;
+
+bool plAiEqsQueryAssetObject::HasContext(const char* szName) const
+{
+  if (plStringUtils::IsEqual(szName, "Querier"))
+    return true;
+  for (const auto* slot : m_ContextSlots)
+  {
+    if (slot != nullptr && slot->m_pContext != nullptr && slot->m_sName == szName)
+      return true;
+  }
+  return false;
+}
+
+plString plAiEqsQueryAssetObject::ValidateRoot() const
+{
+  if (m_pGenerator == nullptr)
+    return "Choose a generator.";
+  if (!HasContext(m_pGenerator->GetCenterContext()))
+    return "Generator center references an unknown context. Add the slot or select Querier.";
+  if (!plMath::IsFinite(m_pGenerator->m_fRadiusMin) || !plMath::IsFinite(m_pGenerator->m_fRadiusMax) ||
+      m_pGenerator->m_fRadiusMin < 0 || m_pGenerator->m_fRadiusMin > m_pGenerator->m_fRadiusMax)
+    return "Generator radius must satisfy 0 <= Min <= Max.";
+  for (plUInt32 i = 0; i < m_ContextSlots.GetCount(); ++i)
+  {
+    const auto* slot = m_ContextSlots[i];
+    if (slot == nullptr || slot->m_pContext == nullptr || slot->m_sName.IsEmpty())
+      return "Every context slot needs a name and provider.";
+    if (slot->m_sName == "Querier")
+      return "Querier is a reserved context name.";
+    for (plUInt32 j = 0; j < i; ++j)
+    {
+      if (m_ContextSlots[j] != nullptr && m_ContextSlots[j]->m_sName == slot->m_sName)
+        return "Context names must be unique.";
+    }
+  }
+  return {};
+}
+
+plString plAiEqsQueryAssetObject::ValidateTest(plUInt32 uiIndex) const
+{
+  const auto* object = m_Tests[uiIndex];
+  if (object == nullptr || object->m_pTest == nullptr)
+    return "Choose a test type.";
+  const auto* test = object->m_pTest;
+  if (const char* context = test->GetContextProperty())
+  {
+    if (!HasContext(context))
+      return "Unknown context. Add a matching context slot (names are case sensitive).";
+  }
+  if (!plMath::IsFinite(test->m_fWeight) || test->m_fWeight < 0)
+    return "Weight must be finite and non-negative.";
+  if (test->m_Purpose != plAiEqsTestPurpose::ScoreOnly)
+  {
+    if (!plMath::IsFinite(test->m_fFilterMin) || !plMath::IsFinite(test->m_fFilterMax))
+      return "Filter limits must be finite.";
+    if (test->m_FilterCondition == plAiEqsFilterCondition::Between && test->m_fFilterMin > test->m_fFilterMax)
+      return "Filter Min must not exceed Max.";
+    if (test->m_FilterCondition == plAiEqsFilterCondition::Reachable && !plDynamicCast<const plAiEqsTest_PathLength*>(test))
+      return "Reachable requires a Path Length test. Approximate reachability only proves a direct path.";
+    if (test->m_FilterCondition == plAiEqsFilterCondition::DirectPath && !plDynamicCast<const plAiEqsTest_ReachableApprox*>(test))
+      return "Direct path requires a Reachable Approx test.";
+  }
+  const auto* distance = plDynamicCast<const plAiEqsTest_Distance*>(test);
+  const auto* path = plDynamicCast<const plAiEqsTest_PathLength*>(test);
+  const float min = distance ? distance->m_fBandMin : (path ? path->m_fBandMin : 0);
+  const float max = distance ? distance->m_fBandMax : (path ? path->m_fBandMax : 0);
+  if (!plMath::IsFinite(min) || !plMath::IsFinite(max) || min < 0 || min > max)
+    return "Scoring band must satisfy 0 <= BandMin <= BandMax.";
+  if (m_pGenerator != nullptr)
+  {
+    const auto payload = m_pGenerator->GetPayloadType();
+    if ((plDynamicCast<const plAiEqsTest_CoverQuality*>(test) || plDynamicCast<const plAiEqsTest_CoverFacing*>(test)) &&
+        payload != plAiEqsPayloadType::CoverPoint)
+      return "This test requires a Cover Points generator; otherwise its missing-data policy applies.";
+    if (plDynamicCast<const plAiEqsTest_Unclaimed*>(test) && payload != plAiEqsPayloadType::CoverPoint && payload != plAiEqsPayloadType::SmartObjectSlot)
+      return "Unclaimed requires cover or smart-object candidates; otherwise its missing-data policy applies.";
+  }
+  return {};
+}
 
 plAiEqsQueryAssetObject::~plAiEqsQueryAssetObject()
 {
@@ -119,6 +215,15 @@ namespace
 plStatus plAiEqsQueryAssetDocument::WriteAsset(plStreamWriter& inout_stream, const plPlatformProfile* pAssetProfile) const
 {
   const plAiEqsQueryAssetObject* pProp = GetProperties();
+  const plString rootError = pProp->ValidateRoot();
+  if (!rootError.IsEmpty())
+    return plStatus(rootError.GetView());
+  for (plUInt32 i = 0; i < pProp->m_Tests.GetCount(); ++i)
+  {
+    const plString issue = pProp->ValidateTest(i);
+    if (!issue.IsEmpty())
+      plLog::Warning("EQS test {}: {}", i + 1, issue);
+  }
 
   plAiEqsQueryDesc desc;
 
@@ -164,6 +269,7 @@ plStatus plAiEqsQueryAssetDocument::WriteAsset(plStreamWriter& inout_stream, con
     auto& testDesc = desc.m_Tests.ExpandAndGetRef();
     testDesc.m_pTest = CloneReflected(pTest->m_pTest);
     pTest->m_ScoreCurve.ConvertToRuntimeData(testDesc.m_ScoreCurve);
+    testDesc.m_bLegacyCurveDomain = pTest->m_bLegacyCurveDomain;
   }
 
   PL_SUCCEED_OR_RETURN(desc.Serialize(inout_stream));

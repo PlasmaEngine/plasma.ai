@@ -49,14 +49,14 @@ namespace plAiAssetUi
 
   /// \brief Evaluates one consideration the way plAiConsiderationDesc::Evaluate does:
   /// normalize raw into [min,max], remap through the curve (empty curve = pass-through), clamp to [0,1].
-  float EvaluateConsideration(const plCurve1D& curve, float fRaw, float fMin, float fMax, float* out_pNormalized = nullptr);
+  float EvaluateConsideration(const plCurve1D& curve, float fRaw, float fMin, float fMax, float* out_pNormalized = nullptr, bool bLegacyDomain = false);
 
   /// \brief Combines consideration outputs into the final utility, mirroring plAiUtilityEvaluator::ScoreUtility
   /// (product with veto, n-axis compensation, weight scaling, clamp).
   float ComposeUtility(plArrayPtr<const float> considerationValues, float fWeight, float fWeightScale);
 
   /// \brief Paints a curve into the given rect (grid + curve). A null/empty curve draws the identity diagonal.
-  void PaintCurve(QPainter& p, const QRectF& rect, const plCurve1D* pCurve, const QColor& curveColor);
+  void PaintCurve(QPainter& p, const QRectF& rect, const plCurve1D* pCurve, const QColor& curveColor, bool bLegacyDomain = false);
 } // namespace plAiAssetUi
 
 /// \brief One consideration of a referenced behavior asset, for read-only display.
@@ -66,6 +66,7 @@ struct plAiBehaviorPeekConsideration
   float m_fInputMin = 0.0f;
   float m_fInputMax = 1.0f;
   bool m_bNeedsTarget = false;
+  bool m_bLegacyCurveDomain = false;
   plCurve1D m_Curve; ///< empty = pass-through
 };
 

@@ -28,6 +28,7 @@ public:
 
   plAiEqsTest* m_pTest = nullptr; // owned
   plSingleCurveData m_ScoreCurve;
+  bool m_bLegacyCurveDomain = false; ///< Compatibility: map input onto the first-to-last point interval.
 };
 
 /// \brief Editor-side object model of the 'AI EQS Query' asset.
@@ -50,6 +51,11 @@ public:
   plDynamicArray<plAiEqsContextSlotObject*> m_ContextSlots; // owned
   plAiEqsGenerator* m_pGenerator = nullptr;                 // owned
   plDynamicArray<plAiEqsTestObject*> m_Tests;               // owned
+
+  /// Empty means valid. Test messages are also displayed beside their cards.
+  plString ValidateRoot() const;
+  plString ValidateTest(plUInt32 uiIndex) const;
+  bool HasContext(const char* szName) const;
 };
 
 class plAiEqsQueryAssetDocument : public plSimpleAssetDocument<plAiEqsQueryAssetObject>

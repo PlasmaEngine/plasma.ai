@@ -112,6 +112,7 @@ void plAiEqsWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiScratc
     }
 
     slot.m_Phase = QuerySlot::Phase::Tests;
+    slot.m_StageSummary.SetFormat("{} generated", slot.m_Items.GetCount());
     slot.m_uiTestCursor = 0;
     slot.m_uiItemCursor = 0;
   }
@@ -135,33 +136,29 @@ void plAiEqsWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiScratc
       SortByPartialScore(slot.m_Items);
     }
 
+    for (plUInt32 i = slot.m_uiItemCursor; i < slot.m_Items.GetCount(); ++i)
+    {
+      slot.m_Items[i].m_TestData = plAiEqsTestData::Valid;
+      slot.m_Items[i].m_bHasMeasurement = false;
+      slot.m_Items[i].m_bReachable = false;
+      slot.m_Items[i].m_bDirectPath = false;
+    }
     const plUInt32 uiProcessed = test.Run(ctx, slot.m_Items.GetArrayPtr(), slot.m_uiItemCursor);
 
-    const auto purpose = static_cast<plAiEqsTestPurpose::Enum>(test.m_Purpose.GetValue());
     const plUInt32 uiEnd = slot.m_uiItemCursor + uiProcessed;
 
     for (plUInt32 i = slot.m_uiItemCursor; i < uiEnd; ++i)
     {
       plAiEqsItem& item = slot.m_Items[i];
 
-      const float fCurved = testDesc.ApplyCurve(item.m_fRaw);
-
-      if (uiTestIndex < plAiEqsItem::MaxRecordedTests)
+      if (!testDesc.ProcessItem(test, item, uiTestIndex))
       {
-        item.m_TestScores[uiTestIndex] = fCurved;
-      }
-
-      // hard filters judge the RAW value - a response curve cannot rescue a zero
-      if (plAiEqsTestPurpose::Filters(purpose) && item.m_fRaw <= 0.0f)
-      {
-        item.m_bDiscarded = true;
-        continue;
-      }
-
-      if (plAiEqsTestPurpose::Scores(purpose))
-      {
-        item.m_fScoreSum += test.m_fWeight * fCurved;
-        item.m_fWeightSum += test.m_fWeight;
+        slot.m_DiscardedDebug.PushBack(item);
+        slot.m_StageSummary.AppendFormat(" -> T{} failed: {}", uiTestIndex + 1, plAiEqsTestDataName(item.m_TestData));
+        slot.m_Result.m_Status = plAiEqsQueryResult::Status::MissingData;
+        slot.m_CompletedAt = GetWorld()->GetClock().GetAccumulatedTime();
+        slot.m_Phase = QuerySlot::Phase::Done;
+        return;
       }
     }
 
@@ -178,11 +175,12 @@ void plAiEqsWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiScratc
     {
       if (slot.m_Items[i].m_bDiscarded)
       {
-        slot.m_DiscardedDebug.PushBack(slot.m_Items[i].m_vPosition);
+        slot.m_DiscardedDebug.PushBack(slot.m_Items[i]);
         slot.m_Items.RemoveAtAndSwap(i);
       }
     }
 
+    slot.m_StageSummary.AppendFormat(" -> T{}: {}", uiTestIndex + 1, slot.m_Items.GetCount());
     if (slot.m_Items.IsEmpty())
     {
       slot.m_Result.m_Status = plAiEqsQueryResult::Status::NoResult;
@@ -262,6 +260,7 @@ void plAiEqsWorldModule::FinalizeQuery(QuerySlot& slot)
     for (plUInt32 t = 0; t < uiRecordedTests; ++t)
     {
       result.m_TestScores[t] = item.m_TestScores[t];
+      result.m_TestTrace[t] = item.m_TestTrace[t];
     }
   }
 

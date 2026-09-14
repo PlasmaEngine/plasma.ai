@@ -91,6 +91,7 @@ void plAiNavigationComponent::OnSimulationStarted()
   m_Steering.m_qRotation = GetOwner()->GetGlobalRotation();
   m_vPreviousPosition = m_Steering.m_vPosition;
   m_fPreviousTimeStep = 0.0f;
+  m_vCrowdVelocity.SetZero();
 }
 
 void plAiNavigationComponent::OnDeactivated()
@@ -116,6 +117,7 @@ void plAiNavigationComponent::SetDestination(const plVec3& vGlobalPos, bool bAll
 void plAiNavigationComponent::CancelNavigation()
 {
   m_Navigation.CancelNavigation();
+  m_vCrowdVelocity.SetZero();
 
   if (m_State != plAiNavigationComponentState::Falling)
   {
@@ -464,8 +466,9 @@ void plAiNavigationComponent::Steer(plTransform& transform, float tDiff)
   m_Steering.Calculate(tDiff, GetWorld());
 
   // ---- crowd avoidance ----
-  // Consume the avoidance velocity solved LAST frame (the crowd module solves in PostAsync,
-  // after this update ran) and submit this frame's state for the next solve.
+  // The solver receives the velocity steering aims for (not this frame's acceleration step) and
+  // returns the avoidance velocity one frame later, since the crowd module solves in PostAsync after
+  // this update. The agent approaches that velocity within its acceleration limits.
   if (m_bCrowdAvoidance && cvar_AiCrowdEnable)
   {
     if (m_pCrowdModule == nullptr)
@@ -478,18 +481,44 @@ void plAiNavigationComponent::Steer(plTransform& transform, float tDiff)
       m_CrowdAgentID = m_pCrowdModule->RegisterAgent();
     }
 
+    plVec3 vPreferredDir = m_Steering.m_qRotation * plVec3::MakeAxisX();
+    vPreferredDir.z = 0.0f;
+    vPreferredDir.NormalizeIfNotZero(plVec3::MakeZero()).IgnoreResult();
+
     plVec3 vAdjustedVelocity;
     if (m_pCrowdModule->TryGetAdjustedVelocity(m_CrowdAgentID, vAdjustedVelocity))
     {
+      // speed along the heading follows Acceleration / Deceleration; the side-step part reacts at
+      // the Deceleration rate, so dodging another agent is not as slow as speeding up
+      const plVec3 vDelta = vAdjustedVelocity - m_vCrowdVelocity;
+      const float fAlong = vDelta.Dot(vPreferredDir);
+      plVec3 vLateral = vDelta - vPreferredDir * fAlong;
+
+      const float fMaxAlong = tDiff * ((fAlong >= 0.0f) ? m_fAcceleration : m_fDecceleration);
+      const float fMaxLateral = tDiff * m_fDecceleration;
+      const float fLateralLength = vLateral.GetLength();
+
+      if (fLateralLength > fMaxLateral)
+      {
+        vLateral *= fMaxLateral / fLateralLength;
+      }
+
+      m_vCrowdVelocity += vPreferredDir * plMath::Max(-fMaxAlong, plMath::Min(fAlong, fMaxAlong)) + vLateral;
+
       // override only the position integration; rotation keeps facing the corridor waypoint,
       // so avoidance side-steps read as strafing
-      m_Steering.m_vPosition = transform.m_vPosition + vAdjustedVelocity * tDiff;
+      m_Steering.m_vPosition = transform.m_vPosition + m_vCrowdVelocity * tDiff;
+    }
+    else
+    {
+      // no recent solve: continue seamlessly from plain steering
+      m_vCrowdVelocity = m_Steering.m_vDesiredVelocity;
     }
 
     plAiCrowdAgentState agentState;
     agentState.m_vPosition = transform.m_vPosition;
-    agentState.m_vVelocity = m_Steering.m_vVelocity;
-    agentState.m_vDesiredVelocity = m_Steering.m_vDesiredVelocity;
+    agentState.m_vVelocity = m_vCrowdVelocity;
+    agentState.m_vDesiredVelocity = vPreferredDir * m_Steering.m_fMaxSpeed; // speed after Calculate's arrival, turn and stop-walk limits
     agentState.m_fRadius = m_fAgentRadius;
     agentState.m_fMaxSpeed = m_fSpeed;
     agentState.m_Quality = m_AvoidanceQuality;
@@ -602,6 +631,7 @@ void plAiNavigationComponent::FinishLinkTraversal()
   m_Steering.m_vPosition = m_vLinkEnd;
   m_Steering.m_qRotation = GetOwner()->GetGlobalRotation();
   m_Steering.m_vVelocity = plVec3::MakeZero();
+  m_vCrowdVelocity.SetZero();
 
   m_bLinkHandledExternally = false;
   m_State = plAiNavigationComponentState::Moving;

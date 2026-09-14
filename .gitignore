@@ -9,6 +9,7 @@ Output/
 *.lib
 *.dll
 *.link.rsp
+Bin/**/AiSemanticsTests.exe
 
 # Generated Qt sources (moc/uic/rcc)
 *.moc.cpp

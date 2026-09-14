@@ -23,7 +23,7 @@ struct PL_AIPLUGIN_DLL plAiEqsContextSlotDesc
 /// \brief One test step of a query: the test object plus its response curve.
 ///
 /// The curve remaps the test's raw [0,1] value before weighting; an empty curve means identity.
-/// Hard filtering always applies to the RAW value (a curve cannot rescue a zero).
+/// Filtering uses the test's condition independently of the response curve.
 struct PL_AIPLUGIN_DLL plAiEqsTestDesc
 {
   plAiEqsTestDesc();
@@ -33,12 +33,16 @@ struct PL_AIPLUGIN_DLL plAiEqsTestDesc
 
   plUniquePtr<plAiEqsTest> m_pTest;
   plCurve1D m_ScoreCurve;
+  bool m_bLegacyCurveDomain = false; ///< Compatibility: map input onto the first-to-last point interval.
 
   /// \brief Sorts control points and builds the linear approximation. Call once after filling the curve.
   void PrepareCurve();
 
   /// \brief Remaps a raw [0,1] value through the curve (identity when empty), clamped to [0,1].
   float ApplyCurve(float fRaw) const;
+
+  /// Shared runtime/editor postprocessing. Returns false when the entire query must fail.
+  bool ProcessItem(const plAiEqsTest& test, plAiEqsItem& item, plUInt32 uiTestIndex) const;
 };
 
 /// \brief Everything that defines one EQS query: generator, ordered tests, context slots, run mode.

@@ -17,6 +17,7 @@ public:
   float m_fInputMin = 0.0f;
   float m_fInputMax = 1.0f;
   plSingleCurveData m_ResponseCurve;
+  bool m_bLegacyCurveDomain = false; ///< Compatibility: map input onto the first-to-last point interval.
 };
 
 /// \brief Editor-side object model of the 'AI Behavior' asset.

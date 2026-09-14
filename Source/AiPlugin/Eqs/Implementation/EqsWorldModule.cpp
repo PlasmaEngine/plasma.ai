@@ -130,6 +130,8 @@ plAiEqsWorldModule::QueryID plAiEqsWorldModule::SubmitQuery(const plAiEqsQueryRe
   slot.m_PreCollected.Clear();
   slot.m_Items.Clear();
   slot.m_DiscardedDebug.Clear();
+  slot.m_SubmittedAt = GetWorld()->GetClock().GetAccumulatedTime();
+  slot.m_StageSummary = "0 generated";
   slot.m_Phase = QuerySlot::Phase::Generate;
   slot.m_uiTestCursor = 0;
   slot.m_uiItemCursor = 0;
@@ -461,10 +463,18 @@ void plAiEqsWorldModule::RetainDebugQuery(const QuerySlot& slot)
   debug.m_vQuerier = slot.m_vQuerier;
   debug.m_TopN = slot.m_Result.m_TopN;
   debug.m_sName = (slot.m_pDesc != nullptr) ? slot.m_pDesc->m_sName.GetData() : "";
+  debug.m_sStageSummary = slot.m_StageSummary;
+  debug.m_SubmittedAt = slot.m_SubmittedAt;
+  debug.m_Contexts = slot.m_ResolvedSlots;
+  if (slot.m_pDesc != nullptr)
+  {
+    for (const auto& test : slot.m_pDesc->m_Tests)
+      debug.m_TestNames.PushBack(test.m_pTest ? test.m_pTest->GetDynamicRTTI()->GetTypeName() : "<missing test>");
+  }
 
   debug.m_Discarded.Clear();
 
-  for (plUInt32 i = 0; i < slot.m_DiscardedDebug.GetCount() && i < 32; ++i)
+  for (plUInt32 i = 0; i < slot.m_DiscardedDebug.GetCount(); ++i)
   {
     debug.m_Discarded.PushBack(slot.m_DiscardedDebug[i]);
   }
@@ -481,8 +491,26 @@ void plAiEqsWorldModule::DrawQueryVisualization()
 
   for (const DebugQuery& debug : m_DebugQueries)
   {
-    for (const plVec3& vDiscarded : debug.m_Discarded)
+    if (cvar_EqsVisualizeScores)
     {
+      plDebugRenderer::Draw3DText(GetWorld(), plFmt("{}\n{}\nage {} s", debug.m_sName, debug.m_sStageSummary, plArgF((now - debug.m_SubmittedAt).GetSeconds(), 2)),
+        debug.m_vQuerier + plVec3(0, 0, 2.5f), plColor::White);
+      for (const auto& context : debug.m_Contexts)
+      {
+        for (const auto& position : context.m_Positions)
+          plDebugRenderer::Draw3DText(GetWorld(), context.m_sName.GetData(), position + plVec3(0, 0, 0.8f), plColor::Yellow);
+      }
+    }
+    for (const auto& discarded : debug.m_Discarded)
+    {
+      const plVec3& vDiscarded = discarded.m_vPosition;
+      if (cvar_EqsVisualizeScores)
+      {
+        const auto index = discarded.m_uiRejectedBy;
+        const char* reason = plAiEqsTestDataName(discarded.m_TestData);
+        plDebugRenderer::Draw3DText(GetWorld(), plFmt("T{} {}\n{}; value {}, raw {}", index + 1, index < debug.m_TestNames.GetCount() ? debug.m_TestNames[index].GetData() : "", discarded.m_TestData == plAiEqsTestData::Valid ? "filter rejected" : reason, plArgF(discarded.m_bHasMeasurement ? discarded.m_fMeasurement : discarded.m_fRaw, 2), plArgF(discarded.m_fRaw, 2)),
+          vDiscarded + plVec3(0, 0, 0.4f), plColor::Gray);
+      }
       // gray cross for filtered-out items
       plDebugRenderer::Line cross[2];
       cross[0] = plDebugRenderer::Line(vDiscarded + plVec3(-0.12f, -0.12f, 0.1f), vDiscarded + plVec3(0.12f, 0.12f, 0.1f));
@@ -524,7 +552,11 @@ void plAiEqsWorldModule::DrawQueryVisualization()
 
         for (plUInt32 t = 0; t < winner.m_uiRecordedTests; ++t)
         {
-          sBreakdown.AppendFormat("T{}: {}\n", t, plArgF(winner.m_TestScores[t], 2));
+          const auto& trace = winner.m_TestTrace[t];
+          sBreakdown.AppendFormat("T{} {}: {}\nvalue {} raw {} curve {} contribution {}\n", t + 1,
+            t < debug.m_TestNames.GetCount() ? debug.m_TestNames[t].GetData() : "",
+            trace.m_bSkipped ? "skipped" : (trace.m_bPassed ? "pass" : "fail"),
+            plArgF(trace.m_fMeasurement, 2), plArgF(trace.m_fRaw, 2), plArgF(trace.m_fCurved, 2), plArgF(trace.m_fContribution, 2));
         }
 
         sBreakdown.AppendFormat("= {}", plArgF(winner.m_fScore, 2));

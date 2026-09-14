@@ -1,6 +1,7 @@
 #include <AiPlugin/AiPluginPCH.h>
 
 #include <AiPlugin/Eqs/EqsQueryResource.h>
+#include <AiPlugin/Utils/AiResponseCurve.h>
 #include <Foundation/Serialization/ReflectionSerializer.h>
 #include <Foundation/Utilities/AssetFileHeader.h>
 
@@ -84,18 +85,61 @@ float plAiEqsTestDesc::ApplyCurve(float fRaw) const
   if (m_ScoreCurve.IsEmpty())
     return fRaw;
 
-  const double fPos = m_ScoreCurve.ConvertNormalizedPos(fRaw);
-  return plMath::Clamp(static_cast<float>(m_ScoreCurve.Evaluate(fPos)), 0.0f, 1.0f);
+  return plAiEvaluateResponseCurve(m_ScoreCurve, fRaw, m_bLegacyCurveDomain);
 }
 
 //////////////////////////////////////////////////////////////////////////
+
+bool plAiEqsTestDesc::ProcessItem(const plAiEqsTest& test, plAiEqsItem& item, plUInt32 uiTestIndex) const
+{
+  plAiEqsTestTrace trace;
+  const bool nonFinite = !plMath::IsFinite(item.m_fRaw) || (item.m_bHasMeasurement && !plMath::IsFinite(item.m_fMeasurement));
+  if (nonFinite)
+    item.m_TestData = plAiEqsTestData::InvalidMeasurement;
+  trace.m_bEvaluated = true;
+  trace.m_Data = item.m_TestData;
+  trace.m_fMeasurement = item.m_bHasMeasurement ? item.m_fMeasurement : item.m_fRaw;
+  trace.m_fRaw = item.m_fRaw;
+  const bool valid = item.m_TestData == plAiEqsTestData::Valid;
+  const bool legacy = test.m_MissingDataPolicy == plAiEqsMissingDataPolicy::Legacy && !nonFinite;
+  const bool failQuery = !valid && test.m_MissingDataPolicy == plAiEqsMissingDataPolicy::FailQuery;
+  trace.m_bSkipped = !valid && test.m_MissingDataPolicy == plAiEqsMissingDataPolicy::SkipTest;
+
+  if (!trace.m_bSkipped)
+  {
+    const auto purpose = static_cast<plAiEqsTestPurpose::Enum>(test.m_Purpose.GetValue());
+    // Compatibility uses the old raw decision for unavailable data. Never invert unavailable data.
+    trace.m_bPassed = valid ? (!plAiEqsTestPurpose::Filters(purpose) || test.PassesFilter(item))
+                            : (legacy && (!plAiEqsTestPurpose::Filters(purpose) || item.m_fRaw > 0.0f));
+    trace.m_fCurved = (valid || legacy) ? ApplyCurve(item.m_fRaw) : 0.0f;
+    if (valid && test.m_bInvertScore)
+      trace.m_fCurved = 1.0f - trace.m_fCurved;
+    if (!trace.m_bPassed)
+    {
+      item.m_bDiscarded = true;
+      item.m_uiRejectedBy = static_cast<plUInt16>(uiTestIndex);
+    }
+    else if (plAiEqsTestPurpose::Scores(purpose))
+    {
+      trace.m_fContribution = test.m_fWeight * trace.m_fCurved;
+      item.m_fScoreSum += trace.m_fContribution;
+      item.m_fWeightSum += test.m_fWeight;
+    }
+  }
+  if (uiTestIndex < plAiEqsItem::MaxRecordedTests)
+  {
+    item.m_TestTrace[uiTestIndex] = trace;
+    item.m_TestScores[uiTestIndex] = trace.m_fCurved;
+  }
+  return !failQuery;
+}
 
 plAiEqsQueryDesc::plAiEqsQueryDesc() = default;
 plAiEqsQueryDesc::~plAiEqsQueryDesc() = default;
 
 plResult plAiEqsQueryDesc::Serialize(plStreamWriter& inout_stream) const
 {
-  inout_stream.WriteVersion(1);
+  inout_stream.WriteVersion(2);
 
   inout_stream << m_sName;
   inout_stream << m_RunMode;
@@ -121,6 +165,7 @@ plResult plAiEqsQueryDesc::Serialize(plStreamWriter& inout_stream) const
   {
     WriteReflectedObject(inout_stream, test.m_pTest.Borrow());
     test.m_ScoreCurve.Save(inout_stream);
+    inout_stream << test.m_bLegacyCurveDomain;
   }
 
   return PL_SUCCESS;
@@ -128,7 +173,7 @@ plResult plAiEqsQueryDesc::Serialize(plStreamWriter& inout_stream) const
 
 plResult plAiEqsQueryDesc::Deserialize(plStreamReader& inout_stream)
 {
-  inout_stream.ReadVersion(1);
+  const auto version = inout_stream.ReadVersion(2);
 
   inout_stream >> m_sName;
   inout_stream >> m_RunMode;
@@ -163,7 +208,12 @@ plResult plAiEqsQueryDesc::Deserialize(plStreamReader& inout_stream)
   {
     auto& test = m_Tests.ExpandAndGetRef();
     PL_SUCCEED_OR_RETURN(ReadReflectedObject(inout_stream, test.m_pTest));
+    if (version == 1 && test.m_pTest != nullptr)
+      test.m_pTest->m_MissingDataPolicy = plAiEqsMissingDataPolicy::Legacy;
     test.m_ScoreCurve.Load(inout_stream);
+    test.m_bLegacyCurveDomain = true;
+    if (version >= 2)
+      inout_stream >> test.m_bLegacyCurveDomain;
     test.PrepareCurve();
   }
 

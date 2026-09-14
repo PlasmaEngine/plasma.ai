@@ -8,7 +8,7 @@
 PackageInfo
 {
 	string %Id{"plasma.ai"}
-	string %Version{"1.1.4"}
+	string %Version{"1.1.5"}
 	string %Publisher{"PlasmaTechnology"}
 	string %License{"MIT"}
 	string %Homepage{"https://plasmagameengine.com"}

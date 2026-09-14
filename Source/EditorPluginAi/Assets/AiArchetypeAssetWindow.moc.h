@@ -65,13 +65,14 @@ class plQtAiCurveMiniView : public QWidget
 public:
   explicit plQtAiCurveMiniView(QWidget* pParent);
 
-  void SetCurve(const plCurve1D& curve);
+  void SetCurve(const plCurve1D& curve, bool bLegacyDomain = false);
 
 protected:
   virtual void paintEvent(QPaintEvent* pEvent) override;
 
 private:
   plCurve1D m_Curve;
+  bool m_bLegacyDomain = false;
 };
 
 /// \brief One referenced behavior in the archetype's category ladder.
