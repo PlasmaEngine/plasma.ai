@@ -417,7 +417,7 @@ PL_BEGIN_STATIC_REFLECTED_ENUM(plAiPatrolPointMode, 1)
   PL_ENUM_CONSTANTS(plAiPatrolPointMode::Waypoints, plAiPatrolPointMode::RandomAroundHome, plAiPatrolPointMode::Spline)
 PL_END_STATIC_REFLECTED_ENUM;
 
-PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plStateMachineState_AiPickPatrolPoint, 2, plRTTIDefaultAllocator<plStateMachineState_AiPickPatrolPoint>)
+PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plStateMachineState_AiPickPatrolPoint, 3, plRTTIDefaultAllocator<plStateMachineState_AiPickPatrolPoint>)
 {
   PL_BEGIN_PROPERTIES
   {
@@ -426,7 +426,9 @@ PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plStateMachineState_AiPickPatrolPoint, 2, plRTTI
     PL_MEMBER_PROPERTY("ResultEntry", m_sResultEntry),
     PL_MEMBER_PROPERTY("RouteGlobalKey", m_sRouteGlobalKey),
     PL_MEMBER_PROPERTY("Radius", m_fRadius)->AddAttributes(new plDefaultValueAttribute(10.0f), new plClampValueAttribute(0.5f, 1000.0f)),
+    PL_MEMBER_PROPERTY("HomeEntry", m_sHomeEntry),
     PL_MEMBER_PROPERTY("StepDistance", m_fStepDistance)->AddAttributes(new plDefaultValueAttribute(5.0f), new plClampValueAttribute(0.5f, 1000.0f)),
+    PL_MEMBER_PROPERTY("ResumeRadius", m_fResumeRadius)->AddAttributes(new plDefaultValueAttribute(1.5f), new plClampValueAttribute(0.0f, 100.0f)),
   }
   PL_END_PROPERTIES;
 }
@@ -438,6 +440,7 @@ plStateMachineState_AiPickPatrolPoint::plStateMachineState_AiPickPatrolPoint(plS
 {
   m_sTargetEntry.Assign("Ai_PatrolTarget");
   m_sResultEntry.Assign("Ai_PatrolResult");
+  m_sHomeEntry.Assign("Ai_PatrolHome");
 }
 
 plStateMachineState_AiPickPatrolPoint::~plStateMachineState_AiPickPatrolPoint() = default;
@@ -499,6 +502,39 @@ plGameObject* plStateMachineState_AiPickPatrolPoint::ResolveRouteObject(plWorld*
   return pRoute;
 }
 
+namespace
+{
+  /// Inverse of plSplineComponent::GetKeyAtDistanceHelper(). Distances and keys both increase monotonically.
+  float PatrolSplineKeyToDistance(const plArrayMap<float, float>& distanceToKey, float fKey)
+  {
+    if (distanceToKey.IsEmpty())
+      return 0.0f;
+
+    plUInt32 uiLower = 0;
+    plUInt32 uiUpper = distanceToKey.GetCount() - 1;
+
+    if (fKey <= distanceToKey.GetValue(uiLower))
+      return distanceToKey.GetKey(uiLower);
+
+    if (fKey >= distanceToKey.GetValue(uiUpper))
+      return distanceToKey.GetKey(uiUpper);
+
+    while (uiUpper - uiLower > 1)
+    {
+      const plUInt32 uiMid = (uiLower + uiUpper) / 2;
+
+      if (distanceToKey.GetValue(uiMid) <= fKey)
+        uiLower = uiMid;
+      else
+        uiUpper = uiMid;
+    }
+
+    const float fLowerKey = distanceToKey.GetValue(uiLower);
+    const float fUpperKey = distanceToKey.GetValue(uiUpper);
+    return plMath::Lerp(distanceToKey.GetKey(uiLower), distanceToKey.GetKey(uiUpper), plMath::Saturate(plMath::Unlerp(fLowerKey, fUpperKey, fKey)));
+  }
+} // namespace
+
 void plStateMachineState_AiPickPatrolPoint::OnEnter(plStateMachineInstance& ref_instance, void* pInstanceData, const plStateMachineState* pFromState) const
 {
   auto pData = static_cast<InstanceData*>(pInstanceData);
@@ -514,11 +550,8 @@ void plStateMachineState_AiPickPatrolPoint::OnEnter(plStateMachineInstance& ref_
     return;
   }
 
-  if (!pData->m_bHomeCaptured)
-  {
-    pData->m_bHomeCaptured = true;
-    pData->m_vHomePosition = pOwner->GetGlobalPosition();
-  }
+  const plVec3 vOwnerPosition = pOwner->GetGlobalPosition();
+  const float fResumeRadiusSqr = plMath::Square(m_fResumeRadius);
 
   plVec3 vPickedPosition = plVec3::MakeZero();
   bool bPicked = false;
@@ -542,6 +575,32 @@ void plStateMachineState_AiPickPatrolPoint::OnEnter(plStateMachineInstance& ref_
       {
         plLog::Warning("AiPickPatrolPoint: route '{}' has no child waypoints.", m_sRouteGlobalKey);
         break;
+      }
+
+      if (!pData->m_bCursorSeeded)
+      {
+        pData->m_bCursorSeeded = true;
+
+        plUInt32 uiClosest = 0;
+        float fClosestDistSqr = plMath::MaxValue<float>();
+
+        for (plUInt32 i = 0; i < waypoints.GetCount(); ++i)
+        {
+          const float fDistSqr = (waypoints[i]->GetGlobalPosition() - vOwnerPosition).GetLengthSquared();
+          if (fDistSqr < fClosestDistSqr)
+          {
+            fClosestDistSqr = fDistSqr;
+            uiClosest = i;
+          }
+        }
+
+        // already standing on the closest waypoint -> continue with the one after it
+        if (fClosestDistSqr <= fResumeRadiusSqr)
+        {
+          uiClosest = (uiClosest + 1) % waypoints.GetCount();
+        }
+
+        pData->m_uiNextWaypoint = uiClosest;
       }
 
       vPickedPosition = waypoints[pData->m_uiNextWaypoint % waypoints.GetCount()]->GetGlobalPosition();
@@ -571,7 +630,26 @@ void plStateMachineState_AiPickPatrolPoint::OnEnter(plStateMachineInstance& ref_
         break;
       }
 
-      float fDistance = pData->m_fSplineDistance + m_fStepDistance * static_cast<float>(pData->m_iSplineDirection);
+      float fStep = m_fStepDistance;
+
+      if (!pData->m_bCursorSeeded)
+      {
+        pData->m_bCursorSeeded = true;
+
+        float fLocalDistance = 0.0f;
+        const float fKey = pSpline->FindKeyClosestToPoint(vOwnerPosition, fLocalDistance, plSplineComponentSpace::Global);
+        pData->m_fSplineDistance = PatrolSplineKeyToDistance(pSpline->GetDistanceToKeyRemapping(), fKey);
+
+        // measured in global space: fLocalDistance ignores the route's scale.
+        // not on the spline yet -> walk to the closest point first instead of stepping past it
+        const plVec3 vClosest = pSpline->GetPositionAtDistance(pData->m_fSplineDistance, plSplineComponentSpace::Global);
+        if ((vClosest - vOwnerPosition).GetLengthSquared() > fResumeRadiusSqr)
+        {
+          fStep = 0.0f;
+        }
+      }
+
+      float fDistance = pData->m_fSplineDistance + fStep * static_cast<float>(pData->m_iSplineDirection);
 
       if (pSpline->GetClosed())
       {
@@ -613,6 +691,29 @@ void plStateMachineState_AiPickPatrolPoint::OnEnter(plStateMachineInstance& ref_
         break;
       }
 
+      if (m_sHomeEntry.IsEmpty())
+      {
+        if (!pData->m_bHomeCaptured)
+        {
+          pData->m_bHomeCaptured = true;
+          pData->m_vHomePosition = vOwnerPosition;
+        }
+      }
+      else
+      {
+        // the blackboard outlives the state machine instance, so home is captured once per agent
+        const plVariant home = pBlackboard->GetEntryValue(m_sHomeEntry);
+        if (home.IsA<plVec3>())
+        {
+          pData->m_vHomePosition = home.Get<plVec3>();
+        }
+        else
+        {
+          pData->m_vHomePosition = vOwnerPosition;
+          pBlackboard->SetEntryValue(m_sHomeEntry, vOwnerPosition);
+        }
+      }
+
       // may fail while the navmesh sector around home is still generating -> caller should retry later
       bPicked = pNavigation->FindRandomPointAroundCircle(pData->m_vHomePosition, m_fRadius, vPickedPosition);
       break;
@@ -640,6 +741,8 @@ plResult plStateMachineState_AiPickPatrolPoint::Serialize(plStreamWriter& inout_
   inout_stream << m_sRouteGlobalKey;
   inout_stream << m_fRadius;
   inout_stream << m_fStepDistance;
+  inout_stream << m_fResumeRadius;
+  inout_stream << m_sHomeEntry;
 
   return PL_SUCCESS;
 }
@@ -658,6 +761,12 @@ plResult plStateMachineState_AiPickPatrolPoint::Deserialize(plStreamReader& inou
   if (uiVersion >= 2)
   {
     inout_stream >> m_fStepDistance;
+  }
+
+  if (uiVersion >= 3)
+  {
+    inout_stream >> m_fResumeRadius;
+    inout_stream >> m_sHomeEntry;
   }
 
   return PL_SUCCESS;

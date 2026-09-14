@@ -132,9 +132,16 @@ PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiPatrolPointMode);
 
 /// \brief State machine state that picks the next patrol position and writes it to the blackboard.
 ///
-/// Waypoints mode: the route is an object with a global key; its children are visited in order
-/// (the current index is per state machine instance). RandomAroundHome mode: picks a random
-/// navmesh point (via the owner's plAiNavigationComponent) around the agent's home position.
+/// Waypoints mode: the route is an object with a global key; its children are visited in order.
+/// Spline mode: the route carries a plSplineComponent; each pick advances StepDistance along it.
+/// The cursor lives in the state machine instance, which is rebuilt on every behavior activation,
+/// so the first pick resumes from the agent's position: the closest waypoint / spline point, or the
+/// next one if the agent is already within ResumeRadius of it.
+///
+/// RandomAroundHome mode: picks a random navmesh point (via the owner's plAiNavigationComponent)
+/// around the agent's home position. Home is the agent's position at its first pick, stored in the
+/// blackboard entry 'HomeEntry' (default 'Ai_PatrolHome') so it survives behavior re-activation.
+/// Presetting that entry (e.g. from a blackboard template) defines home explicitly.
 ///
 /// Writes the position into 'TargetEntry' (default 'Ai_PatrolTarget') and 1 into 'ResultEntry'
 /// (default 'Ai_PatrolResult') on success, 2 on failure (missing route, empty route, no navmesh
@@ -160,11 +167,14 @@ public:
   plString m_sRouteGlobalKey;    ///< Waypoints/Spline mode: global key OR object name of the route object
   float m_fRadius = 10.0f;       ///< RandomAroundHome mode: how far away from home points may be
   float m_fStepDistance = 5.0f;  ///< Spline mode: how far along the spline each pick advances
+  float m_fResumeRadius = 1.5f;  ///< Waypoints/Spline mode: on resume, the closest point counts as reached within this distance
+  plHashedString m_sHomeEntry;   ///< RandomAroundHome mode: blackboard entry holding the home position; empty = per instance
 
 private:
   struct InstanceData
   {
     plUInt32 m_uiNextWaypoint = 0;
+    bool m_bCursorSeeded = false; ///< first Waypoints/Spline pick seeds the cursor from the agent's position
     bool m_bHomeCaptured = false;
     bool m_bRouteSearched = false;
     plInt8 m_iSplineDirection = 1; ///< open splines ping-pong: +1 forward, -1 backward
