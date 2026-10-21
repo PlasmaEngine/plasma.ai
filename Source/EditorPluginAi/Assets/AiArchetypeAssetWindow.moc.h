@@ -10,6 +10,9 @@
 
 class plAiArchetypeAssetDocument;
 class plQtAiArchetypeAssetDocumentWindow;
+class plQtAiArchetypeStackView;
+class plQtAiPerceptionView;
+class plQtDocumentPanel;
 class plDocumentObject;
 
 class QLineEdit;
@@ -107,6 +110,7 @@ private:
 /// Shows the referenced behaviors grouped into the seven category bands they will actually
 /// arbitrate in (base weight x WeightScale = effective weight resolved in place), the perception
 /// settings as a live confidence timeline, and a read-only peek into the selected behavior.
+/// The stack and the perception panel are engine-drawn; -engineAiEditors false keeps the Qt widgets.
 class plQtAiArchetypeAssetDocumentWindow : public plQtAiAssetDocumentWindow
 {
   Q_OBJECT
@@ -120,6 +124,14 @@ public:
   void SetWeightScale(const plUuid& guid, double fValue);
   void OpenBehavior(const plUuid& guid);
   void RemoveBehavior(const plUuid& guid);
+  void AddBehavior();
+  void BrowseBlackboardTemplate();
+  void SetRootValue(const char* szProperty, const plVariant& value, const char* szDescription);
+  void GetBehaviorGuids(plDynamicArray<plUuid>& out_guids) const;
+  const char* GetBehaviorRef(plUInt32 uiIndex) const;
+
+  plAiArchetypeAssetDocument* GetArchetypeDocument() const { return m_pArchetypeDocument; }
+  const plUuid& GetSelectedRow() const { return m_SelectedRow; }
 
 protected:
   virtual void OnAssetPropertiesChanged() override;
@@ -136,19 +148,22 @@ private:
     QLabel* m_pEmpty = nullptr;
   };
 
+  /// Both return the perception dock.
+  plQtDocumentPanel* CreateQtPanels(plDocument* pDocument);
+  plQtDocumentPanel* CreateEnginePanels(plDocument* pDocument);
   QWidget* CreateHeaderBand(QWidget* pParent);
   QWidget* CreateInsightPanel(QWidget* pParent);
   void RefreshHeader();
   void RebuildStack();
   void RefreshStack();
   void RefreshPeek();
-  void SetRootValue(const char* szProperty, const plVariant& value, const char* szDescription);
   const plDocumentObject* GetPropertiesObject() const;
-  void GetBehaviorGuids(plDynamicArray<plUuid>& out_guids) const;
-  const char* GetBehaviorRef(plUInt32 uiIndex) const;
-  void BrowseBlackboardTemplate();
 
   plAiArchetypeAssetDocument* m_pArchetypeDocument = nullptr;
+
+  // engine-drawn docks
+  plQtAiArchetypeStackView* m_pStackView = nullptr;
+  plQtAiPerceptionView* m_pPerceptionView = nullptr;
 
   // header
   QLineEdit* m_pTeam = nullptr;

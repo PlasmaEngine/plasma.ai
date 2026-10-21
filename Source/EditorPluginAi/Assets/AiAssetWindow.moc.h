@@ -4,7 +4,26 @@
 #include <GuiFoundation/DocumentWindow/DocumentWindow.moc.h>
 #include <ToolsFoundation/Object/DocumentObjectManager.h>
 
+#include <QLabel>
+
 class QWidget;
+
+/// \brief A response curve preview that opens the curve editor when clicked.
+///
+/// The cards paint the curve into a pixmap and set it here; the label scales it to its size.
+class plQtAiCurveButton : public QLabel
+{
+  Q_OBJECT
+
+public:
+  explicit plQtAiCurveButton(QWidget* pParent);
+
+Q_SIGNALS:
+  void clicked();
+
+protected:
+  virtual void mouseReleaseEvent(QMouseEvent* pEvent) override;
+};
 
 /// \brief Shared shell for the AI Behavior and AI Archetype asset windows.
 ///
@@ -19,6 +38,9 @@ public:
   /// \param sResourceType the asset type name registered via plResourceManager::RegisterResourceForAssetType
   plQtAiAssetDocumentWindow(plDocument* pDocument, const char* szUniqueName, const char* szResourceType);
   ~plQtAiAssetDocumentWindow();
+
+  /// \brief Whether the cards and previews are engine-drawn; -engineAiEditors false keeps the Qt widgets.
+  static bool IsEngineUiEnabled();
 
 protected:
   /// \brief Creates the classic property-grid widget (asset status indicator + grid), for use as a "Raw Properties" dock tab.

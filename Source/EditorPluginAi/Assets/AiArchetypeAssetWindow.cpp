@@ -2,13 +2,15 @@
 
 #include <EditorPluginAi/Assets/AiArchetypeAsset.h>
 #include <EditorPluginAi/Assets/AiArchetypeAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiArchetypeViews.h>
 
 #include <AiPlugin/UtilityAI/Decision/AiScoring.h>
 
-#include <EditorFramework/Assets/AssetBrowserDlg.moc.h>
+#include <EditorFramework/Assets/EngineAssetPicker.h>
 #include <EditorFramework/Assets/AssetCurator.h>
 #include <EditorFramework/EditorApp/EditorApp.moc.h>
 #include <GuiFoundation/DockPanels/DocumentPanel.moc.h>
+#include <GuiFoundation/EngineUi/EngineUiContentWidget.h>
 #include <ToolsFoundation/Object/ObjectAccessorBase.h>
 
 #include <QBoxLayout>
@@ -373,6 +375,72 @@ plQtAiArchetypeAssetDocumentWindow::plQtAiArchetypeAssetDocumentWindow(plDocumen
 {
   m_pArchetypeDocument = static_cast<plAiArchetypeAssetDocument*>(pDocument);
 
+  const bool bEngineUi = IsEngineUiEnabled();
+  plQtDocumentPanel* pInsightPanel = bEngineUi ? CreateEnginePanels(pDocument) : CreateQtPanels(pDocument);
+
+  // right: raw properties, a tab beside perception and peek
+  {
+    plQtDocumentPanel* pRawPanel = new plQtDocumentPanel(this, pDocument);
+    pRawPanel->setObjectName("AiArchetypeRawPropertyDockWidget");
+    pRawPanel->setWindowTitle("Raw Properties");
+    pRawPanel->show();
+    pRawPanel->setWidget(CreateRawPropertiesWidget(pRawPanel), ads::CDockWidget::ForceNoScrollArea);
+
+    if (bEngineUi)
+    {
+      m_pDockManager->addDockWidgetTabToArea(pRawPanel, pInsightPanel->dockAreaWidget());
+      pInsightPanel->setAsCurrentTab();
+    }
+    else
+    {
+      m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pRawPanel);
+    }
+  }
+
+  pDocument->GetSelectionManager()->SetSelection(pDocument->GetObjectManager()->GetRootObject()->GetChildren()[0]);
+
+  FinishWindowCreation();
+
+  if (m_pStackView == nullptr)
+  {
+    RefreshHeader();
+    RebuildStack();
+  }
+}
+
+plQtAiArchetypeAssetDocumentWindow::~plQtAiArchetypeAssetDocumentWindow() = default;
+
+plQtDocumentPanel* plQtAiArchetypeAssetDocumentWindow::CreateEnginePanels(plDocument* pDocument)
+{
+  // central: header and the behavior stack
+  {
+    plQtDocumentPanel* pCentralPanel = new plQtDocumentPanel(this, pDocument);
+    pCentralPanel->setObjectName("AiArchetypeAssetDockWidget");
+    pCentralPanel->setWindowTitle("Behavior stack");
+    pCentralPanel->show();
+
+    plQtEngineUiContentWidget* pWidget = nullptr;
+    m_pStackView = plQtEngineUiContentWidget::Create<plQtAiArchetypeStackView>(pCentralPanel, "AiArchetypeStack", &pWidget, this);
+    pCentralPanel->setWidget(pWidget, ads::CDockWidget::ForceNoScrollArea);
+    m_pDockManager->addDockWidgetTab(ads::CenterDockWidgetArea, pCentralPanel);
+  }
+
+  // right: perception and peek
+  plQtDocumentPanel* pInsightPanel = new plQtDocumentPanel(this, pDocument);
+  pInsightPanel->setObjectName("AiArchetypeInsightDockWidget");
+  pInsightPanel->setWindowTitle("Perception & Peek");
+  pInsightPanel->show();
+
+  plQtEngineUiContentWidget* pWidget = nullptr;
+  m_pPerceptionView = plQtEngineUiContentWidget::Create<plQtAiPerceptionView>(pInsightPanel, "AiArchetypePerception", &pWidget, this);
+  pInsightPanel->setWidget(pWidget, ads::CDockWidget::ForceNoScrollArea);
+  m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pInsightPanel);
+
+  return pInsightPanel;
+}
+
+plQtDocumentPanel* plQtAiArchetypeAssetDocumentWindow::CreateQtPanels(plDocument* pDocument)
+{
   // central: header band + category ladder
   {
     plQtDocumentPanel* pCentralPanel = new plQtDocumentPanel(this, pDocument);
@@ -502,34 +570,17 @@ plQtAiArchetypeAssetDocumentWindow::plQtAiArchetypeAssetDocumentWindow(plDocumen
     m_pDockManager->addDockWidgetTab(ads::CenterDockWidgetArea, pCentralPanel);
   }
 
-  // right: perception + peek panel, raw properties tab
-  {
-    plQtDocumentPanel* pInsightPanel = new plQtDocumentPanel(this, pDocument);
-    pInsightPanel->setObjectName("AiArchetypeInsightDockWidget");
-    pInsightPanel->setWindowTitle("Perception & Peek");
-    pInsightPanel->show();
-    pInsightPanel->setWidget(CreateInsightPanel(pInsightPanel));
+  // right: perception + peek panel
+  plQtDocumentPanel* pInsightPanel = new plQtDocumentPanel(this, pDocument);
+  pInsightPanel->setObjectName("AiArchetypeInsightDockWidget");
+  pInsightPanel->setWindowTitle("Perception & Peek");
+  pInsightPanel->show();
+  pInsightPanel->setWidget(CreateInsightPanel(pInsightPanel));
 
-    m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pInsightPanel);
+  m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pInsightPanel);
 
-    plQtDocumentPanel* pRawPanel = new plQtDocumentPanel(this, pDocument);
-    pRawPanel->setObjectName("AiArchetypeRawPropertyDockWidget");
-    pRawPanel->setWindowTitle("Raw Properties");
-    pRawPanel->show();
-    pRawPanel->setWidget(CreateRawPropertiesWidget(pRawPanel), ads::CDockWidget::ForceNoScrollArea);
-
-    m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pRawPanel);
-  }
-
-  pDocument->GetSelectionManager()->SetSelection(pDocument->GetObjectManager()->GetRootObject()->GetChildren()[0]);
-
-  FinishWindowCreation();
-
-  RefreshHeader();
-  RebuildStack();
+  return pInsightPanel;
 }
-
-plQtAiArchetypeAssetDocumentWindow::~plQtAiArchetypeAssetDocumentWindow() = default;
 
 QWidget* plQtAiArchetypeAssetDocumentWindow::CreateHeaderBand(QWidget* pParent)
 {
@@ -940,6 +991,13 @@ void plQtAiArchetypeAssetDocumentWindow::RefreshPeek()
 
 void plQtAiArchetypeAssetDocumentWindow::OnAssetPropertiesChanged()
 {
+  if (m_pStackView != nullptr)
+  {
+    m_pStackView->Invalidate();
+    m_pPerceptionView->Invalidate();
+    return;
+  }
+
   RefreshHeader();
   RefreshStack();
   RefreshPeek();
@@ -947,6 +1005,20 @@ void plQtAiArchetypeAssetDocumentWindow::OnAssetPropertiesChanged()
 
 void plQtAiArchetypeAssetDocumentWindow::OnAssetStructureChanged()
 {
+  if (m_pStackView != nullptr)
+  {
+    // keep the selection valid
+    plDynamicArray<plUuid> guids;
+    GetBehaviorGuids(guids);
+
+    if (!guids.Contains(m_SelectedRow))
+      m_SelectedRow = plUuid();
+
+    m_pStackView->Invalidate();
+    m_pPerceptionView->Invalidate();
+    return;
+  }
+
   RefreshHeader();
   RebuildStack();
 }
@@ -958,6 +1030,13 @@ void plQtAiArchetypeAssetDocumentWindow::SelectBehaviorRow(const plUuid& guid)
   if (const plDocumentObject* pObject = GetDocument()->GetObjectAccessor()->GetObject(guid))
   {
     GetDocument()->GetSelectionManager()->SetSelection(pObject);
+  }
+
+  if (m_pStackView != nullptr)
+  {
+    m_pStackView->Invalidate();
+    m_pPerceptionView->Invalidate();
+    return;
   }
 
   RefreshStack();
@@ -1026,12 +1105,17 @@ void plQtAiArchetypeAssetDocumentWindow::RemoveBehavior(const plUuid& guid)
 
 void plQtAiArchetypeAssetDocumentWindow::onAddBehavior()
 {
-  plQtAssetBrowserDlg dlg(this, plUuid(), "CompatibleAsset_AiBehavior");
-  if (dlg.exec() == 0 || !dlg.GetSelectedAssetGuid().IsValid())
+  AddBehavior();
+}
+
+void plQtAiArchetypeAssetDocumentWindow::AddBehavior()
+{
+  plEngineAssetPicker::Result picked;
+  if (!plEngineAssetPicker::PickAsset(this, plUuid(), "CompatibleAsset_AiBehavior", picked) || !picked.m_Guid.IsValid())
     return;
 
   plStringBuilder sGuid;
-  plConversionUtils::ToString(dlg.GetSelectedAssetGuid(), sGuid);
+  plConversionUtils::ToString(picked.m_Guid, sGuid);
 
   plObjectAccessorBase* pAccessor = GetDocument()->GetObjectAccessor();
   pAccessor->StartTransaction("Add Behavior");
@@ -1070,12 +1154,12 @@ void plQtAiArchetypeAssetDocumentWindow::BrowseBlackboardTemplate()
     currentGuid = plConversionUtils::ConvertStringToUuid(pProps->m_sBlackboardTemplate);
   }
 
-  plQtAssetBrowserDlg dlg(this, currentGuid, "CompatibleAsset_BlackboardTemplate");
-  if (dlg.exec() == 0 || !dlg.GetSelectedAssetGuid().IsValid())
+  plEngineAssetPicker::Result picked;
+  if (!plEngineAssetPicker::PickAsset(this, currentGuid, "CompatibleAsset_BlackboardTemplate", picked) || !picked.m_Guid.IsValid())
     return;
 
   plStringBuilder sGuid;
-  plConversionUtils::ToString(dlg.GetSelectedAssetGuid(), sGuid);
+  plConversionUtils::ToString(picked.m_Guid, sGuid);
 
   SetRootValue("BlackboardTemplate", plVariant(sGuid.GetData()), "Set Blackboard Template");
 }

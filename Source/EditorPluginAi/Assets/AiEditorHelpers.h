@@ -12,6 +12,7 @@ class plAiInput;
 class plAiConsiderationObject;
 class plSingleCurveData;
 class plRTTI;
+class plStringBuilder;
 class QPainter;
 
 /// \brief Shared helpers for the custom AI asset editor UIs.
@@ -37,9 +38,14 @@ namespace plAiAssetUi
 
   /// \brief "plAiInput_DistanceToTarget" -> "Distance To Target".
   QString PrettyInputName(const plRTTI* pRtti);
+  void GetPrettyInputName(const plRTTI* pRtti, plStringBuilder& out_sName);
 
   /// \brief Short one-line summary of an input's configuration ("'Ai_CoverStatus'", "matches Retreat", ...).
   QString InputParamSummary(const plAiInput* pInput);
+  void GetInputParamSummary(const plAiInput* pInput, plStringBuilder& out_sSummary);
+
+  /// \brief The Add Consideration menu group of an input type: "Target", "Blackboard", "Timing", "Tactical", "Squad" or "Misc".
+  const char* GetInputGroup(const plRTTI* pRtti);
 
   /// \brief Builds an evaluable runtime curve from edit-time curve data.
   ///

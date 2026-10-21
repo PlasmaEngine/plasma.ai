@@ -7,12 +7,27 @@
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
 #include <EditorPluginAi/Assets/AiEqsQueryAsset.h>
 #include <Foundation/Utilities/AssetFileHeader.h>
+#include <Foundation/Utilities/CommandLineUtils.h>
 #include <GuiFoundation/ActionViews/MenuBarActionMapView.moc.h>
 #include <GuiFoundation/ActionViews/ToolBarActionMapView.moc.h>
 #include <GuiFoundation/PropertyGrid/PropertyGridWidget.moc.h>
 
 #include <QBoxLayout>
+#include <QMouseEvent>
 #include <QTimer>
+
+plQtAiCurveButton::plQtAiCurveButton(QWidget* pParent)
+  : QLabel(pParent)
+{
+  setAutoFillBackground(true);
+  setCursor(Qt::PointingHandCursor);
+  setScaledContents(true);
+}
+
+void plQtAiCurveButton::mouseReleaseEvent(QMouseEvent* pEvent)
+{
+  Q_EMIT clicked();
+}
 
 plQtAiAssetDocumentWindow::plQtAiAssetDocumentWindow(plDocument* pDocument, const char* szUniqueName, const char* szResourceType)
   : plQtDocumentWindow(pDocument)
@@ -58,6 +73,11 @@ plQtAiAssetDocumentWindow::~plQtAiAssetDocumentWindow()
   GetDocument()->GetObjectManager()->m_StructureEvents.RemoveEventHandler(plMakeDelegate(&plQtAiAssetDocumentWindow::StructureEventHandler, this));
 
   RestoreResource();
+}
+
+bool plQtAiAssetDocumentWindow::IsEngineUiEnabled()
+{
+  return plCommandLineUtils::GetGlobalInstance()->GetBoolOption("-engineAiEditors", true);
 }
 
 QWidget* plQtAiAssetDocumentWindow::CreateRawPropertiesWidget(QWidget* pParent)

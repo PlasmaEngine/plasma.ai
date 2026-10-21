@@ -1,11 +1,12 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Dialogs/AiProjectSettingsDlg.moc.h>
+#include <EditorPluginAi/Dialogs/AiProjectSettingsEngineDlg.h>
+#include <GuiFoundation/EngineUi/EnginePrompt.h>
 #include <GuiFoundation/UIServices/DynamicEnums.h>
 #include <GuiFoundation/Widgets/DoubleSpinBox.moc.h>
 #include <QCheckBox>
 #include <QDialogButtonBox>
-#include <QInputDialog>
 #include <QPushButton>
 
 void UpdateGroundTypeDynamicEnumValues();
@@ -204,29 +205,13 @@ void plQtAiProjectSettingsDlg::RetrieveGroundTypeTable()
 
 void plQtAiProjectSettingsDlg::on_AddPathCfg_clicked()
 {
-  QString name = "NewPathSearch";
-
-retry:
-
   bool ok = false;
-  name = QInputDialog::getText(this, "Add Path Search Config", "Name:", QLineEdit::Normal, name, &ok);
+  QString name = plQtEnginePrompt::GetText(this, "Add Path Search Config", "Name:", "NewPathSearch", &ok, [this](const QString& sText)
+    { return plAiProjectSettings::ValidateConfigName(sText, m_Config.m_PathSearchConfigs, "Path Search"); });
   if (!ok)
     return;
 
-  if (name.isEmpty())
-  {
-    plQtUiServices::MessageBoxInformation("The name can't be empty.");
-    goto retry;
-  }
-
-  for (const auto& cfg : m_Config.m_PathSearchConfigs)
-  {
-    if (cfg.m_sName == name.toUtf8().data())
-    {
-      plQtUiServices::MessageBoxInformation("A Path Search Config with this name already exists.");
-      goto retry;
-    }
-  }
+  name = name.trimmed();
 
   {
     auto& newCfg = m_Config.m_PathSearchConfigs.ExpandAndGetRef();
@@ -349,29 +334,13 @@ void plQtAiProjectSettingsDlg::RetrievePathConfig(int index)
 
 void plQtAiProjectSettingsDlg::on_AddMeshCfg_clicked()
 {
-  QString name = "New Navmesh";
-
-retry:
-
   bool ok = false;
-  name = QInputDialog::getText(this, "Add Navmesh Config", "Name:", QLineEdit::Normal, name, &ok);
+  QString name = plQtEnginePrompt::GetText(this, "Add Navmesh Config", "Name:", "New Navmesh", &ok, [this](const QString& sText)
+    { return plAiProjectSettings::ValidateConfigName(sText, m_Config.m_NavmeshConfigs, "Navmesh"); });
   if (!ok)
     return;
 
-  if (name.isEmpty())
-  {
-    plQtUiServices::MessageBoxInformation("The name can't be empty.");
-    goto retry;
-  }
-
-  for (const auto& cfg : m_Config.m_NavmeshConfigs)
-  {
-    if (cfg.m_sName == name.toUtf8().data())
-    {
-      plQtUiServices::MessageBoxInformation("A Navmesh Config with this name already exists.");
-      goto retry;
-    }
-  }
+  name = name.trimmed();
 
   {
     auto& newCfg = m_Config.m_NavmeshConfigs.ExpandAndGetRef();

@@ -2,18 +2,19 @@
 
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
 #include <EditorPluginAi/Assets/AiBehaviorAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiBehaviorViews.h>
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
 
 #include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
 #include <AiPlugin/UtilityAI/Decision/AiInput.h>
 
-#include <EditorFramework/Assets/AssetBrowserDlg.moc.h>
+#include <EditorFramework/Assets/EngineAssetPicker.h>
 #include <EditorFramework/Assets/AssetCurator.h>
 #include <EditorFramework/EditorApp/EditorApp.moc.h>
 #include <Foundation/Math/ColorScheme.h>
-#include <GuiFoundation/Dialogs/CurveEditDlg.moc.h>
+#include <GuiFoundation/EngineUi/EngineCurveWindow.h>
 #include <GuiFoundation/DockPanels/DocumentPanel.moc.h>
-#include <GuiFoundation/PropertyGrid/Implementation/PropertyWidget.moc.h>
+#include <GuiFoundation/EngineUi/EngineUiContentWidget.h>
 #include <GuiFoundation/Widgets/SearchableMenu.moc.h>
 #include <ToolsFoundation/Object/ObjectAccessorBase.h>
 
@@ -86,23 +87,6 @@ namespace
   static QString MonoStyle()
   {
     return QStringLiteral("font-family: Consolas, 'Cascadia Mono', monospace;");
-  }
-
-  static const char* InputGroup(const plRTTI* pRtti)
-  {
-    const plStringView sName = pRtti->GetTypeName();
-
-    if (sName.FindSubString("DistanceToTarget") || sName.FindSubString("TargetConfidence") || sName.FindSubString("AngleToTarget"))
-      return "Target";
-    if (sName.FindSubString("Blackboard") || sName.FindSubString("DistanceToPosition"))
-      return "Blackboard";
-    if (sName.FindSubString("TimeSince"))
-      return "Timing";
-    if (sName.FindSubString("Cover") || sName.FindSubString("Exposure"))
-      return "Tactical";
-    if (sName.FindSubString("Squad"))
-      return "Squad";
-    return "Misc";
   }
 } // namespace
 
@@ -198,14 +182,14 @@ plQtAiConsiderationCard::plQtAiConsiderationCard(QWidget* pParent, plQtAiBehavio
 
   // response curve
   {
-    m_pCurveButton = new plQtCurve1DButtonWidget(this);
+    m_pCurveButton = new plQtAiCurveButton(this);
     m_pCurveButton->setMinimumSize(140, 40);
     m_pCurveButton->setMaximumHeight(44);
     m_pCurveButton->setToolTip("Click to edit the response curve.\nRight-click for presets.");
     m_pCurveButton->setContextMenuPolicy(Qt::CustomContextMenu);
     pMain->addWidget(m_pCurveButton, 2);
 
-    connect(m_pCurveButton, &plQtCurve1DButtonWidget::clicked, this, &plQtAiConsiderationCard::onCurveClicked);
+    connect(m_pCurveButton, &plQtAiCurveButton::clicked, this, &plQtAiConsiderationCard::onCurveClicked);
     connect(m_pCurveButton, &QWidget::customContextMenuRequested, this, &plQtAiConsiderationCard::onCurveContextMenu);
   }
 
@@ -718,6 +702,73 @@ plQtAiBehaviorAssetDocumentWindow::plQtAiBehaviorAssetDocumentWindow(plDocument*
 {
   m_pBehaviorDocument = static_cast<plAiBehaviorAssetDocument*>(pDocument);
 
+  const bool bEngineUi = IsEngineUiEnabled();
+  plQtDocumentPanel* pScorePanel = bEngineUi ? CreateEnginePanels(pDocument) : CreateQtPanels(pDocument);
+
+  // right: raw properties, a tab beside the score preview
+  {
+    plQtDocumentPanel* pRawPanel = new plQtDocumentPanel(this, pDocument);
+    pRawPanel->setObjectName("AiBehaviorRawPropertyDockWidget");
+    pRawPanel->setWindowTitle("Raw Properties");
+    pRawPanel->show();
+    pRawPanel->setWidget(CreateRawPropertiesWidget(pRawPanel), ads::CDockWidget::ForceNoScrollArea);
+
+    if (bEngineUi)
+    {
+      m_pDockManager->addDockWidgetTabToArea(pRawPanel, pScorePanel->dockAreaWidget());
+      pScorePanel->setAsCurrentTab();
+    }
+    else
+    {
+      m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pRawPanel);
+    }
+  }
+
+  pDocument->GetSelectionManager()->SetSelection(pDocument->GetObjectManager()->GetRootObject()->GetChildren()[0]);
+
+  FinishWindowCreation();
+
+  if (m_pBehaviorView == nullptr)
+  {
+    RefreshHeader();
+    RebuildCards();
+    m_pScorePanel->RebuildRows();
+  }
+}
+
+plQtAiBehaviorAssetDocumentWindow::~plQtAiBehaviorAssetDocumentWindow() = default;
+
+plQtDocumentPanel* plQtAiBehaviorAssetDocumentWindow::CreateEnginePanels(plDocument* pDocument)
+{
+  // central: header and consideration cards
+  {
+    plQtDocumentPanel* pCentralPanel = new plQtDocumentPanel(this, pDocument);
+    pCentralPanel->setObjectName("AiBehaviorAssetDockWidget");
+    pCentralPanel->setWindowTitle("Behavior");
+    pCentralPanel->show();
+
+    plQtEngineUiContentWidget* pWidget = nullptr;
+    m_pBehaviorView = plQtEngineUiContentWidget::Create<plQtAiBehaviorView>(pCentralPanel, "AiBehavior", &pWidget, this);
+    pCentralPanel->setWidget(pWidget, ads::CDockWidget::ForceNoScrollArea);
+    m_pDockManager->addDockWidgetTab(ads::CenterDockWidgetArea, pCentralPanel);
+  }
+
+  // right: the score preview
+  plQtDocumentPanel* pScorePanel = new plQtDocumentPanel(this, pDocument);
+  pScorePanel->setObjectName("AiBehaviorScorePreviewDockWidget");
+  pScorePanel->setWindowTitle("Score Preview");
+  pScorePanel->show();
+
+  plQtEngineUiContentWidget* pWidget = nullptr;
+  m_pScoreView = plQtEngineUiContentWidget::Create<plQtAiScorePreviewView>(pScorePanel, "AiScorePreview", &pWidget, this);
+  pScorePanel->setWidget(pWidget, ads::CDockWidget::ForceNoScrollArea);
+  m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pScorePanel);
+
+  return pScorePanel;
+}
+
+plQtDocumentPanel* plQtAiBehaviorAssetDocumentWindow::CreateQtPanels(plDocument* pDocument)
+{
   // central: header band + consideration cards
   {
     plQtDocumentPanel* pCentralPanel = new plQtDocumentPanel(this, pDocument);
@@ -790,37 +841,19 @@ plQtAiBehaviorAssetDocumentWindow::plQtAiBehaviorAssetDocumentWindow(plDocument*
     m_pDockManager->addDockWidgetTab(ads::CenterDockWidgetArea, pCentralPanel);
   }
 
-  // right: score preview + raw properties
-  {
-    plQtDocumentPanel* pScorePanel = new plQtDocumentPanel(this, pDocument);
-    pScorePanel->setObjectName("AiBehaviorScorePreviewDockWidget");
-    pScorePanel->setWindowTitle("Score Preview");
-    pScorePanel->show();
+  // right: score preview
+  plQtDocumentPanel* pScorePanel = new plQtDocumentPanel(this, pDocument);
+  pScorePanel->setObjectName("AiBehaviorScorePreviewDockWidget");
+  pScorePanel->setWindowTitle("Score Preview");
+  pScorePanel->show();
 
-    m_pScorePanel = new plQtAiScorePreviewPanel(pScorePanel, m_pBehaviorDocument);
-    pScorePanel->setWidget(m_pScorePanel);
+  m_pScorePanel = new plQtAiScorePreviewPanel(pScorePanel, m_pBehaviorDocument);
+  pScorePanel->setWidget(m_pScorePanel);
 
-    m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pScorePanel);
+  m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pScorePanel);
 
-    plQtDocumentPanel* pRawPanel = new plQtDocumentPanel(this, pDocument);
-    pRawPanel->setObjectName("AiBehaviorRawPropertyDockWidget");
-    pRawPanel->setWindowTitle("Raw Properties");
-    pRawPanel->show();
-    pRawPanel->setWidget(CreateRawPropertiesWidget(pRawPanel), ads::CDockWidget::ForceNoScrollArea);
-
-    m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pRawPanel);
-  }
-
-  pDocument->GetSelectionManager()->SetSelection(pDocument->GetObjectManager()->GetRootObject()->GetChildren()[0]);
-
-  FinishWindowCreation();
-
-  RefreshHeader();
-  RebuildCards();
-  m_pScorePanel->RebuildRows();
+  return pScorePanel;
 }
-
-plQtAiBehaviorAssetDocumentWindow::~plQtAiBehaviorAssetDocumentWindow() = default;
 
 QWidget* plQtAiBehaviorAssetDocumentWindow::CreateHeaderBand(QWidget* pParent)
 {
@@ -1128,6 +1161,13 @@ void plQtAiBehaviorAssetDocumentWindow::RefreshCards()
 
 void plQtAiBehaviorAssetDocumentWindow::OnAssetPropertiesChanged()
 {
+  if (m_pBehaviorView != nullptr)
+  {
+    m_pBehaviorView->Invalidate();
+    m_pScoreView->Recompute();
+    return;
+  }
+
   RefreshHeader();
   RefreshCards();
   m_pScorePanel->RefreshValues();
@@ -1135,6 +1175,20 @@ void plQtAiBehaviorAssetDocumentWindow::OnAssetPropertiesChanged()
 
 void plQtAiBehaviorAssetDocumentWindow::OnAssetStructureChanged()
 {
+  if (m_pBehaviorView != nullptr)
+  {
+    // keep the selection valid
+    plDynamicArray<plUuid> guids;
+    GetConsiderationGuids(guids);
+
+    if (!guids.Contains(m_SelectedConsideration))
+      m_SelectedConsideration = plUuid();
+
+    m_pBehaviorView->Invalidate();
+    m_pScoreView->ResetSliders();
+    return;
+  }
+
   RefreshHeader();
   RebuildCards();
   m_pScorePanel->RebuildRows();
@@ -1149,7 +1203,10 @@ void plQtAiBehaviorAssetDocumentWindow::SelectConsideration(const plUuid& guid)
     GetDocument()->GetSelectionManager()->SetSelection(pObject);
   }
 
-  RefreshCards();
+  if (m_pBehaviorView != nullptr)
+    m_pBehaviorView->Invalidate();
+  else
+    RefreshCards();
 }
 
 void plQtAiBehaviorAssetDocumentWindow::RemoveConsideration(const plUuid& guid)
@@ -1235,12 +1292,15 @@ void plQtAiBehaviorAssetDocumentWindow::OpenCurveEditor(const plUuid& guid)
   if (pCurve == nullptr)
     return;
 
-  plQtCurveEditDlg dlg(pAccessor, pCurve, this);
-  dlg.restoreGeometry(plQtCurveEditDlg::GetLastDialogGeometry());
-  dlg.SetCurveColor(plColorScheme::LightUI(plColorScheme::Blue));
-  dlg.SetCurveExtents(0.0, true, 1.0, true);
-  dlg.SetCurveRanges(0.0, 1.0);
-  dlg.exec();
+  plEngineCurveWindow::Options options;
+  options.m_Color = plColorScheme::LightUI(plColorScheme::Blue);
+  options.m_fLowerExtent = 0.0;
+  options.m_bLowerExtentFixed = true;
+  options.m_fUpperExtent = 1.0;
+  options.m_bUpperExtentFixed = true;
+  options.m_fLowerRange = 0.0;
+  options.m_fUpperRange = 1.0;
+  plEngineCurveWindow::Edit(this, pAccessor, pCurve, options);
 }
 
 plUInt32 plQtAiBehaviorAssetDocumentWindow::GetCurvePresetCount()
@@ -1335,7 +1395,7 @@ void plQtAiBehaviorAssetDocumentWindow::onAddConsideration()
         return;
 
       plStringBuilder sPath;
-      sPath.SetFormat("{}/{}", InputGroup(pRtti), plAiAssetUi::PrettyInputName(pRtti).toUtf8().data());
+      sPath.SetFormat("{}/{}", plAiAssetUi::GetInputGroup(pRtti), plAiAssetUi::PrettyInputName(pRtti).toUtf8().data());
 
       pSearch->AddItem(plAiAssetUi::PrettyInputName(pRtti).toUtf8().data(), sPath, QVariant::fromValue<void*>(const_cast<plRTTI*>(pRtti)));
     },
@@ -1351,6 +1411,11 @@ void plQtAiBehaviorAssetDocumentWindow::onAddConsideration()
 
   menu.exec(m_pAddButton->mapToGlobal(QPoint(0, m_pAddButton->height())));
 
+  AddConsiderationOfType(pChosen);
+}
+
+void plQtAiBehaviorAssetDocumentWindow::AddConsiderationOfType(const plRTTI* pChosen)
+{
   if (pChosen == nullptr)
     return;
 
@@ -1444,12 +1509,12 @@ void plQtAiBehaviorAssetDocumentWindow::BrowseStateMachine()
     currentGuid = plConversionUtils::ConvertStringToUuid(pSm->GetStateMachineFile());
   }
 
-  plQtAssetBrowserDlg dlg(this, currentGuid, "CompatibleAsset_StateMachine");
-  if (dlg.exec() == 0 || !dlg.GetSelectedAssetGuid().IsValid())
+  plEngineAssetPicker::Result picked;
+  if (!plEngineAssetPicker::PickAsset(this, currentGuid, "CompatibleAsset_StateMachine", picked) || !picked.m_Guid.IsValid())
     return;
 
   plStringBuilder sGuid;
-  plConversionUtils::ToString(dlg.GetSelectedAssetGuid(), sGuid);
+  plConversionUtils::ToString(picked.m_Guid, sGuid);
 
   plObjectAccessorBase* pAccessor = GetDocument()->GetObjectAccessor();
 

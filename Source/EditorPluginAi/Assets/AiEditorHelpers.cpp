@@ -88,52 +88,79 @@ namespace plAiAssetUi
 
   QString PrettyInputName(const plRTTI* pRtti)
   {
+    plStringBuilder sName;
+    GetPrettyInputName(pRtti, sName);
+    return QString::fromUtf8(sName.GetData());
+  }
+
+  void GetPrettyInputName(const plRTTI* pRtti, plStringBuilder& out_sName)
+  {
+    out_sName.Clear();
+
     if (pRtti == nullptr)
-      return QStringLiteral("<no input>");
+    {
+      out_sName = "<no input>";
+      return;
+    }
 
     plStringBuilder sName = pRtti->GetTypeName();
     sName.TrimWordStart("plAiInput_");
     sName.TrimWordStart("plAiInput");
 
-    QString sIn = QString::fromUtf8(sName.GetData());
-    QString sOut;
-    sOut.reserve(sIn.size() + 6);
-
-    for (int i = 0; i < sIn.size(); ++i)
+    // a space before each capital that follows a lower-case letter
+    bool bPreviousUpper = true;
+    for (auto it = sName.GetIteratorFront(); it.IsValid(); ++it)
     {
-      if (i > 0 && sIn[i].isUpper() && !sIn[i - 1].isUpper())
-        sOut.append(' ');
+      const plUInt32 uiChar = it.GetCharacter();
+      const bool bUpper = uiChar >= 'A' && uiChar <= 'Z';
 
-      sOut.append(sIn[i]);
+      if (bUpper && !bPreviousUpper)
+        out_sName.Append(' ');
+
+      out_sName.Append(uiChar);
+      bPreviousUpper = bUpper;
     }
-
-    return sOut;
   }
 
   QString InputParamSummary(const plAiInput* pInput)
   {
+    plStringBuilder sSummary;
+    GetInputParamSummary(pInput, sSummary);
+    return QString::fromUtf8(sSummary.GetData());
+  }
+
+  void GetInputParamSummary(const plAiInput* pInput, plStringBuilder& out_sSummary)
+  {
+    out_sSummary.Clear();
+
     if (pInput == nullptr)
-      return QStringLiteral("select an input type");
+    {
+      out_sSummary = "select an input type";
+      return;
+    }
 
     if (auto pBb = plDynamicCast<const plAiInput_BlackboardValue*>(pInput))
     {
-      return QString("'%1' (fallback %2)").arg(QString::fromUtf8(pBb->GetEntryName())).arg(pBb->m_fFallback);
+      out_sSummary.SetFormat("'{}' (fallback {})", pBb->GetEntryName(), pBb->m_fFallback);
+      return;
     }
 
     if (auto pDist = plDynamicCast<const plAiInput_DistanceToPosition*>(pInput))
     {
-      return QString("distance to '%1'").arg(QString::fromUtf8(pDist->GetEntryName()));
+      out_sSummary.SetFormat("distance to '{}'", pDist->GetEntryName());
+      return;
     }
 
     if (auto pConst = plDynamicCast<const plAiInput_Constant*>(pInput))
     {
-      return QString("value %1").arg(pConst->m_fValue);
+      out_sSummary.SetFormat("value {}", pConst->m_fValue);
+      return;
     }
 
     if (auto pCover = plDynamicCast<const plAiInput_CoverAvailability*>(pInput))
     {
-      return pCover->m_Mode == plAiCoverAvailabilityMode::ClaimedQuality ? QStringLiteral("claimed cover quality (Ai_CoverStatus)")
-                                                                         : QStringLiteral("unclaimed cover nearby (Ai_CoverNearby)");
+      out_sSummary = pCover->m_Mode == plAiCoverAvailabilityMode::ClaimedQuality ? "claimed cover quality (Ai_CoverStatus)" : "unclaimed cover nearby (Ai_CoverNearby)";
+      return;
     }
 
     if (auto pIntent = plDynamicCast<const plAiInput_SquadIntent*>(pInput))
@@ -156,25 +183,41 @@ namespace plAiAssetUi
         default:
           break;
       }
-      return QString("1 when squad intent matches %1").arg(szIntent);
+      out_sSummary.SetFormat("1 when squad intent matches {}", szIntent);
+      return;
     }
 
     if (plDynamicCast<const plAiInput_TargetConfidence*>(pInput))
-      return QStringLiteral("perception record confidence 0-1");
-    if (plDynamicCast<const plAiInput_DistanceToTarget*>(pInput))
-      return QStringLiteral("meters to the scored target");
-    if (plDynamicCast<const plAiInput_AngleToTarget*>(pInput))
-      return QStringLiteral("degrees between forward and target (0-180)");
-    if (plDynamicCast<const plAiInput_TargetExposure*>(pInput))
-      return QStringLiteral("target sees me (Ai_TargetExposure)");
-    if (plDynamicCast<const plAiInput_SquadHasAttackToken*>(pInput))
-      return QStringLiteral("Ai_HasAttackToken - squadless agents = 1");
-    if (plDynamicCast<const plAiInput_TimeSinceActivation*>(pInput))
-      return QStringLiteral("seconds this behavior has been active");
-    if (plDynamicCast<const plAiInput_TimeSinceDeactivation*>(pInput))
-      return QStringLiteral("seconds since last deactivation");
+      out_sSummary = "perception record confidence 0-1";
+    else if (plDynamicCast<const plAiInput_DistanceToTarget*>(pInput))
+      out_sSummary = "meters to the scored target";
+    else if (plDynamicCast<const plAiInput_AngleToTarget*>(pInput))
+      out_sSummary = "degrees between forward and target (0-180)";
+    else if (plDynamicCast<const plAiInput_TargetExposure*>(pInput))
+      out_sSummary = "target sees me (Ai_TargetExposure)";
+    else if (plDynamicCast<const plAiInput_SquadHasAttackToken*>(pInput))
+      out_sSummary = "Ai_HasAttackToken - squadless agents = 1";
+    else if (plDynamicCast<const plAiInput_TimeSinceActivation*>(pInput))
+      out_sSummary = "seconds this behavior has been active";
+    else if (plDynamicCast<const plAiInput_TimeSinceDeactivation*>(pInput))
+      out_sSummary = "seconds since last deactivation";
+  }
 
-    return QString();
+  const char* GetInputGroup(const plRTTI* pRtti)
+  {
+    const plStringView sName = pRtti->GetTypeName();
+
+    if (sName.FindSubString("DistanceToTarget") || sName.FindSubString("TargetConfidence") || sName.FindSubString("AngleToTarget"))
+      return "Target";
+    if (sName.FindSubString("Blackboard") || sName.FindSubString("DistanceToPosition"))
+      return "Blackboard";
+    if (sName.FindSubString("TimeSince"))
+      return "Timing";
+    if (sName.FindSubString("Cover") || sName.FindSubString("Exposure"))
+      return "Tactical";
+    if (sName.FindSubString("Squad"))
+      return "Squad";
+    return "Misc";
   }
 
   void BuildRuntimeCurve(const plSingleCurveData& data, plCurve1D& out_curve)

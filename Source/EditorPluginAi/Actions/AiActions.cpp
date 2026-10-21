@@ -1,7 +1,7 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Actions/AiActions.h>
-#include <EditorPluginAi/Dialogs/AiProjectSettingsDlg.moc.h>
+#include <EditorPluginAi/Dialogs/AiProjectSettingsEngineDlg.h>
 #include <GuiFoundation/Action/ActionMapManager.h>
 
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEditorAction, 0, plRTTINoAllocator)
@@ -25,11 +25,17 @@ void plAiActions::UnregisterActions()
 void plAiActions::MapMenuActions()
 {
   /// \todo Is there a way to integrate into ALL document types in a specific menu (ie. project settings)
-  plActionMap* pMap = plActionMapManager::GetActionMap("EditorPluginScene_Scene2MenuBar");
-  PL_ASSERT_DEV(pMap != nullptr, "Mapping the actions failed!");
+  // the scene windows and the package's own AI asset windows
+  const char* szMenuBars[] = {"EditorPluginScene_Scene2MenuBar", "AiBehaviorAssetMenuBar", "AiArchetypeAssetMenuBar", "AiEqsQueryAssetMenuBar"};
 
-  pMap->MapAction(s_hCategoryAi, "G.Plugins.Settings", 5.0f);
-  pMap->MapAction(s_hProjectSettings, "G.Plugins.Settings", "Ai", 1.0f);
+  for (const char* szMenuBar : szMenuBars)
+  {
+    plActionMap* pMap = plActionMapManager::GetActionMap(szMenuBar);
+    PL_ASSERT_DEV(pMap != nullptr, "Mapping the actions failed!");
+
+    pMap->MapAction(s_hCategoryAi, "G.Plugins.Settings", 5.0f);
+    pMap->MapAction(s_hProjectSettings, "G.Plugins.Settings", "Ai", 1.0f);
+  }
 }
 
 plAiEditorAction::plAiEditorAction(const plActionContext& context, const char* szName, ActionType type)
@@ -51,8 +57,7 @@ void plAiEditorAction::Execute(const plVariant& value)
 {
   if (m_Type == ActionType::ProjectSettings)
   {
-    plQtAiProjectSettingsDlg dlg(nullptr);
-    if (dlg.exec() == QDialog::Accepted)
+    if (plQtAiProjectSettingsEngineDlg::Open(nullptr))
     {
       plToolsProject::BroadcastConfigChanged();
     }

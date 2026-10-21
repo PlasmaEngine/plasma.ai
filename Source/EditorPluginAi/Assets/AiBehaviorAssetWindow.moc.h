@@ -10,7 +10,10 @@
 class plAiBehaviorAssetDocument;
 class plAiConsiderationObject;
 class plQtAiBehaviorAssetDocumentWindow;
-class plQtCurve1DButtonWidget;
+class plQtAiBehaviorView;
+class plQtAiScorePreviewView;
+class plQtAiCurveButton;
+class plQtDocumentPanel;
 class plDocumentObject;
 
 class QLineEdit;
@@ -55,7 +58,7 @@ private:
   QLabel* m_pSummaryLabel = nullptr;
   QDoubleSpinBox* m_pMin = nullptr;
   QDoubleSpinBox* m_pMax = nullptr;
-  plQtCurve1DButtonWidget* m_pCurveButton = nullptr;
+  plQtAiCurveButton* m_pCurveButton = nullptr;
   QToolButton* m_pUp = nullptr;
   QToolButton* m_pDown = nullptr;
   QToolButton* m_pRemove = nullptr;
@@ -133,6 +136,7 @@ private:
 /// Header band (name, category, weight, commit bonus, cooldown, logic), consideration cards with
 /// always-visible response curves, a live Score Preview dock and the classic property grid as a
 /// "Raw Properties" tab. All edits go through the document object model (undo/redo intact).
+/// The cards and the preview are engine-drawn; -engineAiEditors false keeps the Qt widgets.
 class plQtAiBehaviorAssetDocumentWindow : public plQtAiAssetDocumentWindow
 {
   Q_OBJECT
@@ -148,6 +152,17 @@ public:
   void SetConsiderationRange(const plUuid& guid, bool bMin, double fValue);
   void OpenCurveEditor(const plUuid& guid);
   void ApplyCurvePreset(const plUuid& guid, plUInt32 uiPreset);
+  void AddConsiderationOfType(const plRTTI* pType);
+  void SetRootValue(const char* szProperty, const plVariant& value, const char* szDescription);
+  void GetConsiderationGuids(plDynamicArray<plUuid>& out_guids) const;
+
+  /// 0 no logic, 1 state machine, 2 action queue.
+  void ChangeLogicType(plInt32 iType);
+  void BrowseStateMachine();
+  void OpenStateMachine();
+
+  plAiBehaviorAssetDocument* GetBehaviorDocument() const { return m_pBehaviorDocument; }
+  const plUuid& GetSelectedConsideration() const { return m_SelectedConsideration; }
 
   static plUInt32 GetCurvePresetCount();
   static const char* GetCurvePresetName(plUInt32 uiPreset);
@@ -160,19 +175,21 @@ private Q_SLOTS:
   void onAddConsideration();
 
 private:
+  /// Both return the score preview dock.
+  plQtDocumentPanel* CreateQtPanels(plDocument* pDocument);
+  plQtDocumentPanel* CreateEnginePanels(plDocument* pDocument);
   QWidget* CreateHeaderBand(QWidget* pParent);
   void RefreshHeader();
   void RebuildCards();
   void RefreshCards();
-  void SetRootValue(const char* szProperty, const plVariant& value, const char* szDescription);
   const plDocumentObject* GetPropertiesObject() const;
   const plDocumentObject* GetConsiderationObject(const plUuid& guid, plInt32* out_pIndex = nullptr) const;
-  void GetConsiderationGuids(plDynamicArray<plUuid>& out_guids) const;
-  void ChangeLogicType(plInt32 iType);
-  void BrowseStateMachine();
-  void OpenStateMachine();
 
   plAiBehaviorAssetDocument* m_pBehaviorDocument = nullptr;
+
+  // engine-drawn docks
+  plQtAiBehaviorView* m_pBehaviorView = nullptr;
+  plQtAiScorePreviewView* m_pScoreView = nullptr;
 
   // header band
   QLineEdit* m_pName = nullptr;

@@ -2,6 +2,7 @@
 
 #include <EditorPluginAi/Assets/AiEqsQueryAsset.h>
 #include <EditorPluginAi/Assets/AiEqsQueryAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiEqsQueryViews.h>
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
 
 #include <AiPlugin/Eqs/EqsContext.h>
@@ -9,10 +10,9 @@
 #include <AiPlugin/Eqs/EqsTest.h>
 
 #include <Foundation/Math/ColorScheme.h>
-#include <Foundation/Math/Random.h>
-#include <GuiFoundation/Dialogs/CurveEditDlg.moc.h>
+#include <GuiFoundation/EngineUi/EngineCurveWindow.h>
 #include <GuiFoundation/DockPanels/DocumentPanel.moc.h>
-#include <GuiFoundation/PropertyGrid/Implementation/PropertyWidget.moc.h>
+#include <GuiFoundation/EngineUi/EngineUiContentWidget.h>
 #include <GuiFoundation/UIServices/DynamicStringEnum.h>
 #include <GuiFoundation/Widgets/SearchableMenu.moc.h>
 #include <ToolsFoundation/Object/ObjectAccessorBase.h>
@@ -44,195 +44,23 @@ namespace
 
   static QString PrettyEqsName(const plRTTI* pRtti)
   {
-    if (pRtti == nullptr)
-      return QStringLiteral("<none>");
-
-    plStringBuilder sName = pRtti->GetTypeName();
-    sName.TrimWordStart("plAiEqsTest_");
-    sName.TrimWordStart("plAiEqsGenerator_");
-    sName.TrimWordStart("plAiEqsContext_");
-
-    QString sIn = QString::fromUtf8(sName.GetData());
-    QString sOut;
-    sOut.reserve(sIn.size() + 6);
-
-    for (int i = 0; i < sIn.size(); ++i)
-    {
-      if (i > 0 && sIn[i].isUpper() && !sIn[i - 1].isUpper())
-        sOut.append(' ');
-
-      sOut.append(sIn[i]);
-    }
-
-    return sOut;
-  }
-
-  static const char* TestGroup(const plRTTI* pRtti)
-  {
-    const plStringView sName = pRtti->GetTypeName();
-
-    if (sName.FindSubString("Distance") || sName.FindSubString("Direction"))
-      return "Distance & Direction";
-    if (sName.FindSubString("Cover") || sName.FindSubString("Unclaimed"))
-      return "Cover";
-    if (sName.FindSubString("LineOfSight"))
-      return "Visibility";
-    if (sName.FindSubString("Reachable") || sName.FindSubString("PathLength"))
-      return "Pathfinding";
-    if (sName.FindSubString("Blackboard"))
-      return "Blackboard";
-    return "Other";
+    plStringBuilder sName;
+    plAiEqsUi::GetPrettyName(pRtti, sName);
+    return QString::fromUtf8(sName.GetData());
   }
 
   static QString TestSummary(const plAiEqsTest* pTest)
   {
-    if (pTest == nullptr)
-      return QStringLiteral("select a test type");
-
-    if (auto pDist = plDynamicCast<const plAiEqsTest_Distance*>(pTest))
-    {
-      return QString("band %1 \xE2\x86\x92 %2 m \xC2\xB7 vs %3").arg(pDist->m_fBandMin, 0, 'f', 1).arg(pDist->m_fBandMax, 0, 'f', 1).arg(QString::fromUtf8(pDist->GetContext()));
-    }
-
-    if (auto pDir = plDynamicCast<const plAiEqsTest_Direction*>(pTest))
-    {
-      return QString("desired angle %1\xC2\xB0 around %2").arg(pDir->m_DesiredAngle.GetDegree(), 0, 'f', 0).arg(QString::fromUtf8(pDir->GetContext()));
-    }
-
-    if (auto pQuality = plDynamicCast<const plAiEqsTest_CoverQuality*>(pTest))
-    {
-      const char* szQuality = pQuality->m_MinQuality == plAiCoverQuality::High ? "High" : (pQuality->m_MinQuality == plAiCoverQuality::Low ? "Low" : "None");
-      return QString("min quality: %1 \xC2\xB7 scored by tier").arg(szQuality);
-    }
-
-    if (auto pFacing = plDynamicCast<const plAiEqsTest_CoverFacing*>(pTest))
-    {
-      return QString("wall must face context \xC2\xB7 min dot %1").arg(pFacing->m_fMinDot, 0, 'f', 2);
-    }
-
-    if (plDynamicCast<const plAiEqsTest_Unclaimed*>(pTest) != nullptr)
-    {
-      return QStringLiteral("cover/slot payload not claimed by others");
-    }
-
-    if (auto pLos = plDynamicCast<const plAiEqsTest_LineOfSight*>(pTest))
-    {
-      const char* szCombine = pLos->m_Combine == plAiEqsContextCombine::Max ? "Max" : (pLos->m_Combine == plAiEqsContextCombine::Average ? "Average" : "Min");
-      return QString("prefer %1 \xC2\xB7 eye heights %2 / %3 \xC2\xB7 combine: %4")
-        .arg(pLos->m_bPreferVisible ? "VISIBLE" : "BLOCKED")
-        .arg(pLos->m_fItemEyeHeight, 0, 'f', 2)
-        .arg(pLos->m_fContextEyeHeight, 0, 'f', 2)
-        .arg(szCombine);
-    }
-
-    if (plDynamicCast<const plAiEqsTest_ReachableApprox*>(pTest) != nullptr)
-    {
-      return QStringLiteral("navmesh raycast from the querier \xC2\xB7 detour scores 0.25");
-    }
-
-    if (auto pPath = plDynamicCast<const plAiEqsTest_PathLength*>(pTest))
-    {
-      return QString("path length band %1 \xE2\x86\x92 %2 m \xC2\xB7 unreachable fails").arg(pPath->m_fBandMin, 0, 'f', 1).arg(pPath->m_fBandMax, 0, 'f', 1);
-    }
-
-    return QString();
+    plStringBuilder sSummary;
+    plAiEqsUi::GetTestSummary(pTest, sSummary);
+    return QString::fromUtf8(sSummary.GetData());
   }
 
   static QString GeneratorSummary(const plAiEqsGenerator* pGen)
   {
-    if (pGen == nullptr)
-      return QStringLiteral("choose a generator - it produces the candidate set");
-
-    const QString sCtx = QString::fromUtf8(pGen->GetCenterContext());
-
-    if (plDynamicCast<const plAiEqsGenerator_Ring*>(pGen) != nullptr)
-      return QString("golden-angle rings %1 \xE2\x86\x92 %2 m around %3, navmesh-projected").arg(pGen->m_fRadiusMin, 0, 'f', 1).arg(pGen->m_fRadiusMax, 0, 'f', 1).arg(sCtx);
-
-    if (auto pGrid = plDynamicCast<const plAiEqsGenerator_Grid*>(pGen))
-      return QString("grid, spacing %1 m, extent %2 m around %3, navmesh-projected").arg(pGrid->m_fSpacing, 0, 'f', 1).arg(pGen->m_fRadiusMax, 0, 'f', 1).arg(sCtx);
-
-    if (plDynamicCast<const plAiEqsGenerator_NavmeshRandom*>(pGen) != nullptr)
-      return QString("random reachable points %1 \xE2\x86\x92 %2 m around %3").arg(pGen->m_fRadiusMin, 0, 'f', 1).arg(pGen->m_fRadiusMax, 0, 'f', 1).arg(sCtx);
-
-    if (plDynamicCast<const plAiEqsGenerator_CoverPoints*>(pGen) != nullptr)
-      return QString("baked cover points within %1 m of %2 \xC2\xB7 AreaNotReady while sectors stream").arg(pGen->m_fRadiusMax, 0, 'f', 1).arg(sCtx);
-
-    if (auto pSo = plDynamicCast<const plAiEqsGenerator_SmartObjects*>(pGen))
-    {
-      const QString sType = plStringUtils::IsNullOrEmpty(pSo->GetType()) ? QStringLiteral("any") : QString::fromUtf8(pSo->GetType());
-      return QString("free '%1' smart object slots within %2 m of %3").arg(sType).arg(pGen->m_fRadiusMax, 0, 'f', 1).arg(sCtx);
-    }
-
-    return QString();
-  }
-
-  static const char* ContextChipText(const plAiEqsTest* pTest)
-  {
-    if (pTest == nullptr)
-      return nullptr;
-
-    const char* szContext = pTest->GetContextProperty();
-
-    if (plStringUtils::IsNullOrEmpty(szContext))
-      return nullptr;
-
-    return szContext;
-  }
-
-  struct CurvePresetPoint
-  {
-    double x;
-    double v;
-  };
-
-  struct CurvePreset
-  {
-    const char* szName;
-    bool bSmooth;
-    plUInt32 uiCount;
-    CurvePresetPoint pts[4];
-  };
-
-  static const CurvePreset s_EqsCurvePresets[] = {
-    {"Linear Rise", false, 2, {{0.0, 0.0}, {1.0, 1.0}}},
-    {"Linear Fall", false, 2, {{0.0, 1.0}, {1.0, 0.0}}},
-    {"Smooth Rise", true, 2, {{0.0, 0.0}, {1.0, 1.0}}},
-    {"Smooth Fall", true, 2, {{0.0, 1.0}, {1.0, 0.0}}},
-    {"Square (emphasize best)", true, 3, {{0.0, 0.0}, {0.5, 0.25}, {1.0, 1.0}}},
-    {"Square Root (lenient)", true, 3, {{0.0, 0.0}, {0.5, 0.7}, {1.0, 1.0}}},
-    {"Bell", true, 3, {{0.0, 0.0}, {0.5, 1.0}, {1.0, 0.0}}},
-    {"Constant 1", false, 2, {{0.0, 1.0}, {1.0, 1.0}}},
-    {"Clear (use raw score)", false, 0, {}},
-  };
-
-  static bool SegmentsIntersect(const plVec2& p1, const plVec2& p2, const plVec2& q1, const plVec2& q2)
-  {
-    auto cross = [](const plVec2& a, const plVec2& b) { return a.x * b.y - a.y * b.x; };
-
-    const plVec2 r = p2 - p1;
-    const plVec2 s = q2 - q1;
-    const float rxs = cross(r, s);
-
-    if (plMath::Abs(rxs) < 0.00001f)
-      return false; // parallel
-
-    const float t = cross(q1 - p1, s) / rxs;
-    const float u = cross(q1 - p1, r) / rxs;
-
-    return t >= 0.0f && t <= 1.0f && u >= 0.0f && u <= 1.0f;
-  }
-
-  static float PreviewTrapezoid(float fValue, float fFullMin, float fFullMax)
-  {
-    if (fValue >= fFullMin && fValue <= fFullMax)
-      return 1.0f;
-
-    const float fFalloff = plMath::Max(0.5f, (fFullMax - fFullMin) * 0.25f);
-
-    if (fValue < fFullMin)
-      return plMath::Max(0.0f, 1.0f - (fFullMin - fValue) / fFalloff);
-
-    return plMath::Max(0.0f, 1.0f - (fValue - fFullMax) / fFalloff);
+    plStringBuilder sSummary;
+    plAiEqsUi::GetGeneratorSummary(pGen, sSummary);
+    return QString::fromUtf8(sSummary.GetData());
   }
 
   static QColor ScoreColor(float fScore)
@@ -372,7 +200,7 @@ plQtAiEqsTestCard::plQtAiEqsTestCard(QWidget* pParent, plQtAiEqsQueryAssetDocume
 
   // response curve (scoring tests) / placeholder (hard filters)
   {
-    m_pCurveButton = new plQtCurve1DButtonWidget(this);
+    m_pCurveButton = new plQtAiCurveButton(this);
     m_pCurveButton->setMinimumSize(100, 36);
     m_pCurveButton->setMaximumHeight(40);
     m_pCurveButton->setToolTip("Response curve remapping the test's raw [0,1] score.\nClick to edit, right-click for presets.");
@@ -387,7 +215,7 @@ plQtAiEqsTestCard::plQtAiEqsTestCard(QWidget* pParent, plQtAiEqsQueryAssetDocume
     pMain->addWidget(m_pNoCurve, 2);
     m_pNoCurve->setVisible(false);
 
-    connect(m_pCurveButton, &plQtCurve1DButtonWidget::clicked, this, &plQtAiEqsTestCard::onCurveClicked);
+    connect(m_pCurveButton, &plQtAiCurveButton::clicked, this, &plQtAiEqsTestCard::onCurveClicked);
     connect(m_pCurveButton, &QWidget::customContextMenuRequested, this, &plQtAiEqsTestCard::onCurveContextMenu);
   }
 
@@ -522,7 +350,7 @@ void plQtAiEqsTestCard::RefreshFromNative(const plAiEqsTestObject* pNative, plUI
   m_pSummaryLabel->setWordWrap(true);
   m_pSummaryLabel->setToolTip(m_pSummaryLabel->text());
 
-  if (const char* szContext = ContextChipText(pTest))
+  if (const char* szContext = plAiEqsUi::GetTestContext(pTest))
   {
     m_pContextChip->SetChip(plQtAiEqsChip::Style::Context, QString::fromUtf8(szContext).toUpper());
   }
@@ -651,9 +479,9 @@ void plQtAiEqsTestCard::onCurveContextMenu(const QPoint& pos)
   QMenu menu(this);
 
   QMenu* pPresets = menu.addMenu("Presets");
-  for (plUInt32 i = 0; i < PL_ARRAY_SIZE(s_EqsCurvePresets); ++i)
+  for (plUInt32 i = 0; i < plAiEqsUi::GetCurvePresetCount(); ++i)
   {
-    QAction* pAction = pPresets->addAction(s_EqsCurvePresets[i].szName);
+    QAction* pAction = pPresets->addAction(plAiEqsUi::GetCurvePresetName(i));
     const plUInt32 uiPreset = i;
     connect(pAction, &QAction::triggered, this, [this, uiPreset]() { m_pWindow->ApplyCurvePreset(m_ObjectGuid, uiPreset); });
   }
@@ -1357,350 +1185,26 @@ void plQtAiEqsPreviewPanel::Recompute()
 
   m_bUpdating = false;
 
-  m_Candidates.Clear();
+  // the shared simulation runs the query against the scatter's situation
+  plAiEqsPreviewSimulation simulation;
+  simulation.m_vQuerier = m_pScatter->m_vQuerier;
+  simulation.m_vThreat = m_pScatter->m_vThreat;
+  simulation.m_vOccluderA = m_pScatter->m_vOccluderA;
+  simulation.m_vOccluderB = m_pScatter->m_vOccluderB;
+  simulation.Run(*pProps);
 
-  const plString rootIssue = pProps->ValidateRoot();
-  if (!rootIssue.IsEmpty())
-  {
-    m_iSelected = -1;
-    m_pScatter->SetCandidates(m_Candidates, m_iSelected);
-    m_pStats->setText(QString::fromUtf8(rootIssue.GetData()));
-    RefreshBreakdown();
-    return;
-  }
-
-  const plVec2 vQuerier = m_pScatter->m_vQuerier;
-  const plVec2 vThreat = m_pScatter->m_vThreat;
-
-  auto resolveContext = [&](const char* szName) -> plVec2 {
-    if (plStringUtils::IsEqual_NoCase(szName, "Querier"))
-      return vQuerier;
-
-    // any authored slot resolves to the threat marker in the local simulation
-    return vThreat;
-  };
-
-  // ---- synthetic generation (seeded - stable across recomputes) ----
-
-  const plAiEqsGenerator* pGen = pProps->m_pGenerator;
-  const plUInt32 uiMaxCandidates = plMath::Clamp<plUInt32>(pProps->m_uiCandidates, 4, 64);
-
-  plRandom rng;
-  rng.Initialize(0xEC5D47u);
-
-  if (pGen != nullptr)
-  {
-    const plVec2 vCenter = resolveContext(pGen->GetCenterContext());
-    const float fRadiusMin = pGen->m_fRadiusMin;
-    const float fRadiusMax = plMath::Max(pGen->m_fRadiusMax, fRadiusMin + 0.1f);
-
-    const bool bCover = plDynamicCast<const plAiEqsGenerator_CoverPoints*>(pGen) != nullptr;
-    const bool bSmartObjects = plDynamicCast<const plAiEqsGenerator_SmartObjects*>(pGen) != nullptr;
-    const bool bGrid = plDynamicCast<const plAiEqsGenerator_Grid*>(pGen) != nullptr;
-    const bool bRandom = plDynamicCast<const plAiEqsGenerator_NavmeshRandom*>(pGen) != nullptr;
-
-    if (bGrid)
-    {
-      const plAiEqsGenerator_Grid* pGrid = static_cast<const plAiEqsGenerator_Grid*>(pGen);
-      float fSpacing = plMath::Max(0.25f, pGrid->m_fSpacing);
-
-      const plUInt32 uiPerAxis = static_cast<plUInt32>(plMath::Floor(plMath::Sqrt(static_cast<float>(uiMaxCandidates))));
-      fSpacing = plMath::Max(fSpacing, (2.0f * fRadiusMax) / plMath::Max(1u, uiPerAxis - 1));
-
-      for (float y = -fRadiusMax; y <= fRadiusMax + 0.01f && m_Candidates.GetCount() < uiMaxCandidates; y += fSpacing)
-      {
-        for (float x = -fRadiusMax; x <= fRadiusMax + 0.01f && m_Candidates.GetCount() < uiMaxCandidates; x += fSpacing)
-        {
-          const float fDistSqr = x * x + y * y;
-
-          if (fDistSqr < plMath::Square(fRadiusMin) || fDistSqr > plMath::Square(fRadiusMax))
-            continue;
-
-          auto& cand = m_Candidates.ExpandAndGetRef();
-          cand.m_vPosition = vCenter + plVec2(x, y);
-        }
-      }
-    }
-    else
-    {
-      const plUInt32 uiCount = bSmartObjects ? plMath::Min<plUInt32>(6, uiMaxCandidates) : uiMaxCandidates;
-      const float fGoldenAngle = 2.39996323f;
-
-      for (plUInt32 i = 0; i < uiCount; ++i)
-      {
-        float fAngle, fRadiusT;
-
-        if (bRandom || bSmartObjects)
-        {
-          fAngle = static_cast<float>(rng.DoubleZeroToOneExclusive()) * 2.0f * plMath::Pi<float>();
-          fRadiusT = plMath::Sqrt(static_cast<float>(rng.DoubleZeroToOneExclusive()));
-        }
-        else
-        {
-          fAngle = i * fGoldenAngle;
-          fRadiusT = plMath::Sqrt((i + 0.5f) / uiCount);
-        }
-
-        const float fRadius = plMath::Lerp(fRadiusMin, fRadiusMax, fRadiusT);
-
-        auto& cand = m_Candidates.ExpandAndGetRef();
-        cand.m_vPosition = vCenter + plVec2(plMath::Cos(plAngle::MakeFromRadian(fAngle)), plMath::Sin(plAngle::MakeFromRadian(fAngle))) * fRadius;
-
-        if (bCover)
-        {
-          cand.m_uiPayload = 1; // CoverPoint
-
-          // synthetic wall: points away from the generator center, jittered
-          plVec2 vWall = cand.m_vPosition - vCenter;
-          vWall.NormalizeIfNotZero(plVec2(1, 0)).IgnoreResult();
-          const plAngle jitter = plAngle::MakeFromRadian((static_cast<float>(rng.DoubleZeroToOneExclusive()) - 0.5f) * 2.5f);
-          const float fSin = plMath::Sin(jitter);
-          const float fCos = plMath::Cos(jitter);
-          cand.m_vWallDir = plVec2(vWall.x * fCos - vWall.y * fSin, vWall.x * fSin + vWall.y * fCos);
-          cand.m_uiCoverQuality = (rng.DoubleZeroToOneExclusive() < 0.4) ? 2 : 1; // High : Low
-        }
-        else if (bSmartObjects)
-        {
-          cand.m_uiPayload = 2; // SmartObjectSlot
-        }
-      }
-    }
-  }
-
-  // ---- tests: cheap first (mirrors the runtime pipeline), real scoring math ----
-
-  struct OrderedTest
-  {
-    PL_DECLARE_POD_TYPE();
-
-    const plAiEqsTestObject* m_pObj;
-    plUInt32 m_uiRowIndex;
-  };
-
-  plHybridArray<OrderedTest, 12> order;
-
-  {
-    plUInt32 uiRow = 0;
-
-    plHybridArray<OrderedTest, 12> all;
-
-    for (const plAiEqsTestObject* pTestObj : pProps->m_Tests)
-    {
-      if (pTestObj == nullptr || pTestObj->m_pTest == nullptr)
-        continue;
-
-      all.PushBack({pTestObj, uiRow});
-      ++uiRow;
-    }
-
-    for (const auto& t : all)
-    {
-      if (t.m_pObj->m_pTest->GetCost() == plAiEqsTest::Cost::Cheap)
-        order.PushBack(t);
-    }
-
-    for (const auto& t : all)
-    {
-      if (t.m_pObj->m_pTest->GetCost() == plAiEqsTest::Cost::Expensive)
-        order.PushBack(t);
-    }
-  }
-
-  plUInt32 uiGenerated = m_Candidates.GetCount();
-
-  for (auto& cand : m_Candidates)
-  {
-    cand.m_TestScores.SetCount(static_cast<plUInt32>(pProps->m_Tests.GetCount()), 0.0f);
-    cand.m_TestTrace.SetCount(pProps->m_Tests.GetCount());
-  }
-
-  plHybridArray<float, 64> scoreSums;
-  plHybridArray<float, 64> weightSums;
-  scoreSums.SetCount(m_Candidates.GetCount(), 0.0f);
-  weightSums.SetCount(m_Candidates.GetCount(), 0.0f);
-
-  QString stageCounts = QString("%1 generated").arg(m_Candidates.GetCount());
-  bool queryFailed = false;
-  for (const OrderedTest& ordered : order)
-  {
-    const plAiEqsTest* pTest = ordered.m_pObj->m_pTest;
-
-    plAiEqsTestDesc processor;
-    plAiAssetUi::BuildRuntimeCurve(ordered.m_pObj->m_ScoreCurve, processor.m_ScoreCurve);
-    processor.m_bLegacyCurveDomain = ordered.m_pObj->m_bLegacyCurveDomain;
-
-    for (plUInt32 c = 0; c < m_Candidates.GetCount(); ++c)
-    {
-      plAiEqsPreviewCandidate& cand = m_Candidates[c];
-
-      if (cand.m_bDiscarded)
-        continue;
-
-      float fRaw = 1.0f;
-      plAiEqsItem item;
-
-      if (auto pDist = plDynamicCast<const plAiEqsTest_Distance*>(pTest))
-      {
-        item.m_fMeasurement = (cand.m_vPosition - resolveContext(pDist->GetContext())).GetLength();
-        item.m_bHasMeasurement = true;
-        fRaw = PreviewTrapezoid(item.m_fMeasurement, pDist->m_fBandMin, pDist->m_fBandMax);
-      }
-      else if (auto pDir = plDynamicCast<const plAiEqsTest_Direction*>(pTest))
-      {
-        const plVec2 vFrom = resolveContext(pDir->GetContext());
-        plVec2 vBase = vQuerier - vFrom;
-        plVec2 vCand = cand.m_vPosition - vFrom;
-
-        if (vBase.NormalizeIfNotZero(plVec2(1, 0)).Succeeded() && vCand.NormalizeIfNotZero(plVec2(1, 0)).Succeeded())
-        {
-          const float fAngle = plMath::ACos(plMath::Clamp(vBase.Dot(vCand), -1.0f, 1.0f)).GetRadian();
-          item.m_fMeasurement = plAngle::MakeFromRadian(fAngle).GetDegree();
-          item.m_bHasMeasurement = true;
-          fRaw = plMath::Max(0.0f, 1.0f - plMath::Abs(fAngle - pDir->m_DesiredAngle.GetRadian()) / plMath::Pi<float>());
-        }
-        else
-          item.m_TestData = plAiEqsTestData::InvalidMeasurement;
-      }
-      else if (auto pQuality = plDynamicCast<const plAiEqsTest_CoverQuality*>(pTest))
-      {
-        if (cand.m_uiPayload == 1)
-        {
-          item.m_fMeasurement = cand.m_uiCoverQuality >= 2 ? 1.0f : 0.5f;
-          item.m_bHasMeasurement = true;
-          if (cand.m_uiCoverQuality < pQuality->m_MinQuality.GetValue())
-            fRaw = 0.0f;
-          else
-            fRaw = (cand.m_uiCoverQuality >= 2) ? 1.0f : 0.5f;
-        }
-        else
-          item.m_TestData = plAiEqsTestData::MissingPayload;
-      }
-      else if (auto pFacing = plDynamicCast<const plAiEqsTest_CoverFacing*>(pTest))
-      {
-        if (cand.m_uiPayload == 1)
-        {
-          plVec2 vToThreat = resolveContext(pFacing->GetContext()) - cand.m_vPosition;
-
-          if (vToThreat.NormalizeIfNotZero(plVec2(1, 0)).Succeeded())
-          {
-            item.m_fMeasurement = cand.m_vWallDir.Dot(vToThreat);
-            item.m_bHasMeasurement = true;
-            fRaw = (item.m_fMeasurement >= pFacing->m_fMinDot) ? 1.0f : 0.0f;
-          }
-          else
-            item.m_TestData = plAiEqsTestData::InvalidMeasurement;
-        }
-        else
-          item.m_TestData = plAiEqsTestData::MissingPayload;
-      }
-      else if (plDynamicCast<const plAiEqsTest_Unclaimed*>(pTest) != nullptr)
-      {
-        fRaw = 1.0f; // everything is unclaimed in the local simulation
-        if (cand.m_uiPayload != 1 && cand.m_uiPayload != 2)
-          item.m_TestData = plAiEqsTestData::MissingPayload;
-      }
-      else if (auto pLos = plDynamicCast<const plAiEqsTest_LineOfSight*>(pTest))
-      {
-        const plVec2 vEye = resolveContext(pLos->GetContext());
-        const bool bBlocked = SegmentsIntersect(vEye, cand.m_vPosition, m_pScatter->m_vOccluderA, m_pScatter->m_vOccluderB);
-        fRaw = (bBlocked != pLos->m_bPreferVisible) ? 1.0f : 0.0f;
-      }
-      else if (plDynamicCast<const plAiEqsTest_ReachableApprox*>(pTest) != nullptr)
-      {
-        fRaw = 1.0f; // no navmesh locally
-        item.m_bDirectPath = true;
-        item.m_bReachable = true;
-      }
-      else if (auto pPath = plDynamicCast<const plAiEqsTest_PathLength*>(pTest))
-      {
-        // approximate: euclidean distance with a detour factor
-        item.m_fMeasurement = (cand.m_vPosition - vQuerier).GetLength() * 1.15f;
-        item.m_bHasMeasurement = true;
-        item.m_bReachable = true;
-        fRaw = plMath::Max(0.001f, PreviewTrapezoid(item.m_fMeasurement, pPath->m_fBandMin, pPath->m_fBandMax));
-      }
-      else
-        item.m_TestData = plAiEqsTestData::InvalidMeasurement; // custom tests need a runtime preview
-
-      if (const char* context = pTest->GetContextProperty())
-      {
-        if (!pProps->HasContext(context))
-          item.m_TestData = plAiEqsTestData::MissingContext;
-      }
-      item.m_fRaw = fRaw;
-      // Use slot zero for the temporary item's trace; editor rows have no 12-test limit.
-      const bool success = processor.ProcessItem(*pTest, item, 0);
-      cand.m_TestScores[ordered.m_uiRowIndex] = item.m_TestScores[0];
-      cand.m_TestTrace[ordered.m_uiRowIndex] = item.m_TestTrace[0];
-      cand.m_bDiscarded = item.m_bDiscarded;
-      scoreSums[c] += item.m_fScoreSum;
-      weightSums[c] += item.m_fWeightSum;
-      if (!success)
-      {
-        queryFailed = true;
-        break;
-      }
-    }
-    plUInt32 surviving = 0;
-    for (const auto& candidate : m_Candidates)
-      surviving += candidate.m_bDiscarded ? 0 : 1;
-    stageCounts += QString(" -> T%1: %2").arg(ordered.m_uiRowIndex + 1).arg(surviving);
-    if (queryFailed)
-    {
-      stageCounts += " (query failed: missing data)";
-      for (auto& candidate : m_Candidates)
-        candidate.m_bDiscarded = true;
-      break;
-    }
-  }
-
-  // ---- finalize ----
-
-  plUInt32 uiSurvivors = 0;
-  plUInt32 uiPositiveResults = 0;
-  plInt32 iWinner = -1;
-  float fBest = -1.0f;
-
-  for (plUInt32 c = 0; c < m_Candidates.GetCount(); ++c)
-  {
-    plAiEqsPreviewCandidate& cand = m_Candidates[c];
-
-    if (cand.m_bDiscarded)
-      continue;
-
-    ++uiSurvivors;
-    cand.m_fFinal = (weightSums[c] > 0.0f) ? (scoreSums[c] / weightSums[c]) : 1.0f;
-
-    if (cand.m_fFinal <= 0.0f)
-      continue; // runtime omits zero-score results even when all filters passed
-    ++uiPositiveResults;
-
-    if (cand.m_fFinal > fBest)
-    {
-      fBest = cand.m_fFinal;
-      iWinner = static_cast<plInt32>(c);
-    }
-  }
-
-  if (iWinner >= 0)
-  {
-    m_Candidates[iWinner].m_bWinner = true;
-  }
+  m_Candidates = simulation.m_Candidates;
 
   if (m_iSelected < 0 || m_iSelected >= static_cast<plInt32>(m_Candidates.GetCount()) || m_Candidates[m_iSelected].m_bDiscarded)
   {
-    m_iSelected = iWinner;
+    m_iSelected = simulation.m_iWinner;
   }
 
   m_pScatter->SetCandidates(m_Candidates, m_iSelected);
 
-  const plUInt32 uiResultLimit = plMath::Clamp<plUInt32>(pProps->m_uiMaxResults, 1, pProps->m_RunMode == plAiEqsRunMode::SingleBest ? 8 : 16);
-  const plUInt32 uiResults = plMath::Min<plUInt32>(uiPositiveResults, uiResultLimit);
-  m_pStats->setText(QString("generated %1 \xC2\xB7 after filters %2 \xC2\xB7 results %3\nlocal simulation \xC2\xB7 LOS via draggable occluder \xC2\xB7 navmesh tests approximated")
-                      .arg(uiGenerated)
-                      .arg(uiSurvivors)
-                      .arg(uiResults) +
-                    "\n" + stageCounts + "\n" + QString::fromUtf8(pProps->ValidateRoot().GetData()));
+  plStringBuilder sStats;
+  simulation.GetStats(sStats);
+  m_pStats->setText(QString::fromUtf8(sStats.GetData()));
 
   RefreshBreakdown();
 }
@@ -1778,6 +1282,75 @@ plQtAiEqsQueryAssetDocumentWindow::plQtAiEqsQueryAssetDocumentWindow(plDocument*
 {
   m_pEqsDocument = static_cast<plAiEqsQueryAssetDocument*>(pDocument);
 
+  const bool bEngineUi = IsEngineUiEnabled();
+  plQtDocumentPanel* pPreviewPanel = bEngineUi ? CreateEnginePanels(pDocument) : CreateQtPanels(pDocument);
+
+  // right: raw properties, a tab beside the preview
+  {
+    plQtDocumentPanel* pRawPanel = new plQtDocumentPanel(this, pDocument);
+    pRawPanel->setObjectName("AiEqsQueryRawPropertyDockWidget");
+    pRawPanel->setWindowTitle("Raw Properties");
+    pRawPanel->show();
+    pRawPanel->setWidget(CreateRawPropertiesWidget(pRawPanel), ads::CDockWidget::ForceNoScrollArea);
+
+    if (bEngineUi)
+    {
+      m_pDockManager->addDockWidgetTabToArea(pRawPanel, pPreviewPanel->dockAreaWidget());
+      pPreviewPanel->setAsCurrentTab();
+    }
+    else
+    {
+      m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pRawPanel);
+    }
+  }
+
+  pDocument->GetSelectionManager()->SetSelection(pDocument->GetObjectManager()->GetRootObject()->GetChildren()[0]);
+
+  FinishWindowCreation();
+
+  if (m_pQueryView == nullptr)
+  {
+    RefreshHeader();
+    m_pContextStrip->Rebuild();
+    RebuildCards();
+    m_pPreviewPanel->RebuildRows();
+  }
+}
+
+plQtAiEqsQueryAssetDocumentWindow::~plQtAiEqsQueryAssetDocumentWindow() = default;
+
+plQtDocumentPanel* plQtAiEqsQueryAssetDocumentWindow::CreateEnginePanels(plDocument* pDocument)
+{
+  // central: header, context strip, generator card, test cards and the status row
+  {
+    plQtDocumentPanel* pCentralPanel = new plQtDocumentPanel(this, pDocument);
+    pCentralPanel->setObjectName("AiEqsQueryAssetDockWidget");
+    pCentralPanel->setWindowTitle("EQS Query");
+    pCentralPanel->show();
+
+    plQtEngineUiContentWidget* pWidget = nullptr;
+    m_pQueryView = plQtEngineUiContentWidget::Create<plQtAiEqsQueryView>(pCentralPanel, "AiEqsQuery", &pWidget, this);
+    pCentralPanel->setWidget(pWidget, ads::CDockWidget::ForceNoScrollArea);
+    m_pDockManager->addDockWidgetTab(ads::CenterDockWidgetArea, pCentralPanel);
+  }
+
+  // right: the query preview
+  {
+    plQtDocumentPanel* pPreviewPanel = new plQtDocumentPanel(this, pDocument);
+    pPreviewPanel->setObjectName("AiEqsQueryPreviewDockWidget");
+    pPreviewPanel->setWindowTitle("Query Preview");
+    pPreviewPanel->show();
+
+    plQtEngineUiContentWidget* pWidget = nullptr;
+    m_pPreviewView = plQtEngineUiContentWidget::Create<plQtAiEqsPreviewView>(pPreviewPanel, "AiEqsQueryPreview", &pWidget, this);
+    pPreviewPanel->setWidget(pWidget, ads::CDockWidget::ForceNoScrollArea);
+    m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pPreviewPanel);
+    return pPreviewPanel;
+  }
+}
+
+plQtDocumentPanel* plQtAiEqsQueryAssetDocumentWindow::CreateQtPanels(plDocument* pDocument)
+{
   // central: header band + context strip + generator card + test cards
   {
     plQtDocumentPanel* pCentralPanel = new plQtDocumentPanel(this, pDocument);
@@ -1886,7 +1459,7 @@ plQtAiEqsQueryAssetDocumentWindow::plQtAiEqsQueryAssetDocumentWindow(plDocument*
     m_pDockManager->addDockWidgetTab(ads::CenterDockWidgetArea, pCentralPanel);
   }
 
-  // right: query preview + raw properties
+  // right: query preview
   {
     plQtDocumentPanel* pPreviewPanel = new plQtDocumentPanel(this, pDocument);
     pPreviewPanel->setObjectName("AiEqsQueryPreviewDockWidget");
@@ -1897,27 +1470,9 @@ plQtAiEqsQueryAssetDocumentWindow::plQtAiEqsQueryAssetDocumentWindow(plDocument*
     pPreviewPanel->setWidget(m_pPreviewPanel);
 
     m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pPreviewPanel);
-
-    plQtDocumentPanel* pRawPanel = new plQtDocumentPanel(this, pDocument);
-    pRawPanel->setObjectName("AiEqsQueryRawPropertyDockWidget");
-    pRawPanel->setWindowTitle("Raw Properties");
-    pRawPanel->show();
-    pRawPanel->setWidget(CreateRawPropertiesWidget(pRawPanel), ads::CDockWidget::ForceNoScrollArea);
-
-    m_pDockManager->addDockWidgetTab(ads::RightDockWidgetArea, pRawPanel);
+    return pPreviewPanel;
   }
-
-  pDocument->GetSelectionManager()->SetSelection(pDocument->GetObjectManager()->GetRootObject()->GetChildren()[0]);
-
-  FinishWindowCreation();
-
-  RefreshHeader();
-  m_pContextStrip->Rebuild();
-  RebuildCards();
-  m_pPreviewPanel->RebuildRows();
 }
-
-plQtAiEqsQueryAssetDocumentWindow::~plQtAiEqsQueryAssetDocumentWindow() = default;
 
 QWidget* plQtAiEqsQueryAssetDocumentWindow::CreateHeaderBand(QWidget* pParent)
 {
@@ -2191,6 +1746,13 @@ void plQtAiEqsQueryAssetDocumentWindow::RefreshCards()
 
 void plQtAiEqsQueryAssetDocumentWindow::OnAssetPropertiesChanged()
 {
+  if (m_pQueryView != nullptr)
+  {
+    m_pQueryView->Invalidate();
+    m_pPreviewView->Recompute();
+    return;
+  }
+
   RefreshHeader();
   m_pContextStrip->Rebuild();
   RefreshCards();
@@ -2199,6 +1761,20 @@ void plQtAiEqsQueryAssetDocumentWindow::OnAssetPropertiesChanged()
 
 void plQtAiEqsQueryAssetDocumentWindow::OnAssetStructureChanged()
 {
+  if (m_pQueryView != nullptr)
+  {
+    // keep the selection valid
+    plDynamicArray<plUuid> guids;
+    GetArrayGuids("Tests", guids);
+
+    if (!guids.Contains(m_SelectedObject))
+      m_SelectedObject = plUuid();
+
+    m_pQueryView->Invalidate();
+    m_pPreviewView->Invalidate();
+    return;
+  }
+
   RefreshHeader();
   m_pContextStrip->Rebuild();
   RebuildCards();
@@ -2214,7 +1790,10 @@ void plQtAiEqsQueryAssetDocumentWindow::SelectObject(const plUuid& guid)
     GetDocument()->GetSelectionManager()->SetSelection(pObject);
   }
 
-  RefreshCards();
+  if (m_pQueryView != nullptr)
+    m_pQueryView->Invalidate();
+  else
+    RefreshCards();
 }
 
 void plQtAiEqsQueryAssetDocumentWindow::SelectGenerator()
@@ -2340,20 +1919,25 @@ void plQtAiEqsQueryAssetDocumentWindow::OpenCurveEditor(const plUuid& guid)
   if (pCurve == nullptr)
     return;
 
-  plQtCurveEditDlg dlg(pAccessor, pCurve, this);
-  dlg.restoreGeometry(plQtCurveEditDlg::GetLastDialogGeometry());
-  dlg.SetCurveColor(plColorScheme::LightUI(plColorScheme::Blue));
-  dlg.SetCurveExtents(0.0, true, 1.0, true);
-  dlg.SetCurveRanges(0.0, 1.0);
-  dlg.exec();
+  plEngineCurveWindow::Options options;
+  options.m_Color = plColorScheme::LightUI(plColorScheme::Blue);
+  options.m_fLowerExtent = 0.0;
+  options.m_bLowerExtentFixed = true;
+  options.m_fUpperExtent = 1.0;
+  options.m_bUpperExtentFixed = true;
+  options.m_fLowerRange = 0.0;
+  options.m_fUpperRange = 1.0;
+  plEngineCurveWindow::Edit(this, pAccessor, pCurve, options);
 }
 
 void plQtAiEqsQueryAssetDocumentWindow::ApplyCurvePreset(const plUuid& guid, plUInt32 uiPreset)
 {
-  if (uiPreset >= PL_ARRAY_SIZE(s_EqsCurvePresets))
+  if (uiPreset >= plAiEqsUi::GetCurvePresetCount())
     return;
 
-  const CurvePreset& preset = s_EqsCurvePresets[uiPreset];
+  plVec2d points[4];
+  bool bSmooth = false;
+  const plUInt32 uiPointCount = plAiEqsUi::GetCurvePresetPoints(uiPreset, points, PL_ARRAY_SIZE(points), bSmooth);
 
   const plDocumentObject* pObject = GetArrayObject("Tests", guid);
   if (pObject == nullptr)
@@ -2386,17 +1970,17 @@ void plQtAiEqsQueryAssetDocumentWindow::ApplyCurvePreset(const plUuid& guid, plU
   }
 
   // insert the preset points (ticks: 4800 per second, extents locked to 0..1)
-  const plInt64 iTangentMode = preset.bSmooth ? plCurveTangentMode::Auto : plCurveTangentMode::Linear;
+  const plInt64 iTangentMode = bSmooth ? plCurveTangentMode::Auto : plCurveTangentMode::Linear;
 
-  for (plUInt32 i = 0; i < preset.uiCount && bOk; ++i)
+  for (plUInt32 i = 0; i < uiPointCount && bOk; ++i)
   {
     plUuid cpGuid = plUuid::MakeUuid();
     bOk &= pAccessor->AddObjectByName(pCurve, "ControlPoints", i, plCurveControlPointData::GetStaticRTTI(), cpGuid).Succeeded();
 
     if (const plDocumentObject* pCp = pAccessor->GetObject(cpGuid))
     {
-      bOk &= pAccessor->SetValueByName(pCp, "Tick", plVariant(static_cast<plInt64>(preset.pts[i].x * 4800.0 + 0.5))).Succeeded();
-      bOk &= pAccessor->SetValueByName(pCp, "Value", plVariant(preset.pts[i].v)).Succeeded();
+      bOk &= pAccessor->SetValueByName(pCp, "Tick", plVariant(static_cast<plInt64>(points[i].x * 4800.0 + 0.5))).Succeeded();
+      bOk &= pAccessor->SetValueByName(pCp, "Value", plVariant(points[i].y)).Succeeded();
       bOk &= pAccessor->SetValueByName(pCp, "LeftTangentMode", plVariant(iTangentMode)).Succeeded();
       bOk &= pAccessor->SetValueByName(pCp, "RightTangentMode", plVariant(iTangentMode)).Succeeded();
     }
@@ -2430,7 +2014,7 @@ void plQtAiEqsQueryAssetDocumentWindow::onAddTest()
         return;
 
       plStringBuilder sPath;
-      sPath.SetFormat("{}/{}", TestGroup(pRtti), PrettyEqsName(pRtti).toUtf8().data());
+      sPath.SetFormat("{}/{}", plAiEqsUi::GetTestGroup(pRtti), PrettyEqsName(pRtti).toUtf8().data());
 
       pSearch->AddItem(PrettyEqsName(pRtti).toUtf8().data(), sPath, QVariant::fromValue<void*>(const_cast<plRTTI*>(pRtti)));
     },
@@ -2446,6 +2030,11 @@ void plQtAiEqsQueryAssetDocumentWindow::onAddTest()
 
   menu.exec(m_pAddButton->mapToGlobal(QPoint(0, m_pAddButton->height())));
 
+  AddTestOfType(pChosen);
+}
+
+void plQtAiEqsQueryAssetDocumentWindow::AddTestOfType(const plRTTI* pChosen)
+{
   if (pChosen == nullptr)
     return;
 
@@ -2507,6 +2096,11 @@ void plQtAiEqsQueryAssetDocumentWindow::ChangeGeneratorType()
 
   menu.exec(QCursor::pos());
 
+  ChangeGeneratorTypeTo(pChosen);
+}
+
+void plQtAiEqsQueryAssetDocumentWindow::ChangeGeneratorTypeTo(const plRTTI* pChosen)
+{
   if (pChosen == nullptr)
     return;
 
@@ -2563,6 +2157,11 @@ void plQtAiEqsQueryAssetDocumentWindow::AddContextSlot()
 
   menu.exec(QCursor::pos());
 
+  AddContextSlotOfType(pChosen);
+}
+
+void plQtAiEqsQueryAssetDocumentWindow::AddContextSlotOfType(const plRTTI* pChosen)
+{
   if (pChosen == nullptr)
     return;
 

@@ -1,6 +1,9 @@
 <RCC>
   <qresource prefix="AiPlugin">
     <file>plAiPlugin.svg</file>
+    <file>CheckBoxOn.svg</file>
+    <file>CheckBoxOff.svg</file>
+    <file>AiKind.svg</file>
   </qresource>
   <qresource prefix="AssetIcons">
     <file>AiBehavior.svg</file>
@@ -20,6 +23,13 @@
     <file>plAiEqsQueryTestComponent.svg</file>
     <file>plAiCoverPointComponent.svg</file>
     <file>plAiNavMeshPrebuildComponent.svg</file>
+    <file>plAiComponent.svg</file>
+    <file>plAiDestructionResponseComponent.svg</file>
+    <file>plAiSmartObjectComponent.svg</file>
+    <file>plAiTacticalQueryTestComponent.svg</file>
+    <file>plAiVoxelGridSettingsComponent.svg</file>
+    <file>plAiVoxelNavigationComponent.svg</file>
+    <file>plAiVoxelObstacleComponent.svg</file>
   </qresource>
 </RCC>
 

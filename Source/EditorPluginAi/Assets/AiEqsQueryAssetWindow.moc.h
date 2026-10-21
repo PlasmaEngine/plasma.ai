@@ -2,6 +2,7 @@
 
 #include <AiPlugin/Eqs/EqsTypes.h>
 #include <EditorPluginAi/Assets/AiAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiEqsPreviewSimulation.h>
 
 #include <Foundation/Containers/HybridArray.h>
 #include <Foundation/Math/Vec2.h>
@@ -15,7 +16,10 @@ class plAiEqsQueryAssetObject;
 class plAiEqsTestObject;
 class plAiEqsGenerator;
 class plQtAiEqsQueryAssetDocumentWindow;
-class plQtCurve1DButtonWidget;
+class plQtAiEqsQueryView;
+class plQtAiEqsPreviewView;
+class plQtAiCurveButton;
+class plQtDocumentPanel;
 class plDocumentObject;
 
 class QLineEdit;
@@ -84,7 +88,7 @@ private:
   QLabel* m_pSummaryLabel = nullptr;
   QWidget* m_pWeightHost = nullptr;
   QDoubleSpinBox* m_pWeight = nullptr;
-  plQtCurve1DButtonWidget* m_pCurveButton = nullptr;
+  plQtAiCurveButton* m_pCurveButton = nullptr;
   QLabel* m_pNoCurve = nullptr;
   QToolButton* m_pUp = nullptr;
   QToolButton* m_pDown = nullptr;
@@ -144,20 +148,6 @@ private:
   QHBoxLayout* m_pLayout = nullptr;
   plHybridArray<QWidget*, 8> m_Chips;
   QPushButton* m_pAddButton = nullptr;
-};
-
-/// \brief One locally simulated candidate of the preview panel.
-struct plAiEqsPreviewCandidate
-{
-  plVec2 m_vPosition = plVec2::MakeZero(); ///< meters, querier-relative plane
-  plVec2 m_vWallDir = plVec2::MakeZero();  ///< synthetic cover wall direction
-  plUInt8 m_uiPayload = 0;                 ///< plAiEqsPayloadType
-  plUInt8 m_uiCoverQuality = 0;            ///< synthetic plAiCoverQuality
-  plHybridArray<float, 12> m_TestScores;   ///< curved per-test scores
-  plHybridArray<plAiEqsTestTrace, 12> m_TestTrace;
-  float m_fFinal = 0.0f;
-  bool m_bDiscarded = false;
-  bool m_bWinner = false;
 };
 
 /// \brief Top-down scatter canvas: draggable querier/threat/occluder, clickable candidates.
@@ -251,7 +241,8 @@ private:
 /// Header band (name, run mode, candidates, max results, navmesh), context strip, generator card,
 /// test cards with always-visible response curves, a live Query Preview dock and the classic
 /// property grid as a "Raw Properties" tab. All edits go through the document object model
-/// (undo/redo intact).
+/// (undo/redo intact). The cards and the preview are engine-drawn; -engineAiEditors false keeps
+/// the Qt widgets.
 class plQtAiEqsQueryAssetDocumentWindow : public plQtAiAssetDocumentWindow
 {
   Q_OBJECT
@@ -270,11 +261,16 @@ public:
   void ApplyCurvePreset(const plUuid& guid, plUInt32 uiPreset);
   void SelectGenerator();
   void ChangeGeneratorType();
+  void ChangeGeneratorTypeTo(const plRTTI* pType);
   void SetGeneratorValue(const char* szProperty, const plVariant& value, const char* szDescription);
   void AddContextSlot();
+  void AddContextSlotOfType(const plRTTI* pType);
   void RemoveContextSlot(const plUuid& guid);
   void SelectContextSlot(const plUuid& guid);
   void GetContextSlotNames(plDynamicArray<plString>& out_names) const;
+  void AddTestOfType(const plRTTI* pType);
+  void SetRootValue(const char* szProperty, const plVariant& value, const char* szDescription);
+  void GetArrayGuids(const char* szProperty, plDynamicArray<plUuid>& out_guids) const;
 
   plAiEqsQueryAssetDocument* GetEqsDocument() const { return m_pEqsDocument; }
   const plUuid& GetSelectedObject() const { return m_SelectedObject; }
@@ -289,17 +285,22 @@ private Q_SLOTS:
 private:
   friend class plQtAiEqsContextStrip;
 
+  /// Both return the preview dock.
+  plQtDocumentPanel* CreateQtPanels(plDocument* pDocument);
+  plQtDocumentPanel* CreateEnginePanels(plDocument* pDocument);
   QWidget* CreateHeaderBand(QWidget* pParent);
   void RefreshHeader();
   void RebuildCards();
   void RefreshCards();
-  void SetRootValue(const char* szProperty, const plVariant& value, const char* szDescription);
   const plDocumentObject* GetPropertiesObject() const;
   const plDocumentObject* GetGeneratorObject() const;
-  void GetArrayGuids(const char* szProperty, plDynamicArray<plUuid>& out_guids) const;
   const plDocumentObject* GetArrayObject(const char* szProperty, const plUuid& guid, plInt32* out_pIndex = nullptr) const;
 
   plAiEqsQueryAssetDocument* m_pEqsDocument = nullptr;
+
+  // engine-drawn docks
+  plQtAiEqsQueryView* m_pQueryView = nullptr;
+  plQtAiEqsPreviewView* m_pPreviewView = nullptr;
 
   // header band
   QLineEdit* m_pName = nullptr;
