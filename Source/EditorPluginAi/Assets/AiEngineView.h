@@ -129,9 +129,9 @@ private:
 /// values. Text and number fields commit once per edit, on Enter or when focus leaves them (W5-D5); a field that
 /// has focus keeps its text and focus across a rebuild.
 ///
-/// A view is an editor UI content: the window's dock shows it in a plQtEngineUiContentWidget, which the engine shell
-/// lends, so the shell shows the same view in the document's frame.
-class plQtAiEngineView : public plEditorUiContent
+/// A view is an editor UI content: the window owns it as a panel (plDocumentWindow::AddPanel), which the engine shell
+/// shows in the document's frame.
+class plAiEngineView : public plEditorUiContent
 {
 public:
   using Action = std::function<void()>;
@@ -139,8 +139,8 @@ public:
   using PickAction = std::function<void(plUInt32)>;
   using ValueAction = std::function<void(float)>;
 
-  explicit plQtAiEngineView(const char* szName);
-  ~plQtAiEngineView();
+  explicit plAiEngineView(const char* szName);
+  ~plAiEngineView();
 
   /// Rebuilds the document in the next UI frame.
   void Invalidate();
@@ -190,6 +190,12 @@ protected:
 
   /// A check box (selection fill and accent tick when on) with its label; the whole rect toggles.
   plUiButton* AddCheckBox(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, bool bChecked, plStringView sTooltip, Action onToggle, bool bEnabled = true, plColorGammaUB labelColor = plColorGammaUB(0, 0, 0, 0));
+
+  /// A rounded toggle chip: accent-tinted when on, with an optional dot before the label.
+  plUiButton* AddChip(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, bool bOn, plColorGammaUB dotColor, plStringView sTooltip, Action onClick);
+
+  /// The width AddChip needs for the label.
+  static float ChipWidth(plStringView sLabel, bool bDot);
 
   /// An invisible button over rect: selects a card, opens a curve. onContext runs on a right-click.
   plUiButton* AddClickArea(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sTooltip, Action onClick, Action onContext = {});
@@ -261,6 +267,13 @@ private:
   plEventSubscriptionID m_PointerSubscription = 0;
   plVec2 m_vBuiltSize = plVec2::MakeZero();
   bool m_bRebuild = true;
+
+  /// A rebuild replaces the document, and with it the button a press is waiting to complete into a click. Views that
+  /// rebuild on live data (the AI Debugger, five times a second) would drop clicks, so rebuilds wait for the release.
+  bool IsPointerHeld() const;
+  bool m_bPointerHeld = false;
+  plTime m_PointerPressTime;
+  plTime m_PointerReleaseTime;
 
   /// Deferred actions run only while the view lives.
   std::shared_ptr<bool> m_pAlive;

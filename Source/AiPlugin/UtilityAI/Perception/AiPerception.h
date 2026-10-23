@@ -27,16 +27,24 @@ PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiStimulusType);
 /// \brief One perception event that AI agents may react to.
 ///
 /// Stimuli are broadcast: all agents within m_fRadius around m_vGlobalPosition receive the
-/// stimulus (subject to faction filtering) and update their perceived-target records from it.
+/// stimulus (subject to faction filtering and their archetype's senses) and update their
+/// perceived-target records from it. Receivers remember where the event happened, not where the
+/// source moves afterwards.
 struct PL_AIPLUGIN_DLL plAiStimulus
 {
   plEnum<plAiStimulusType> m_Type;
   plHashedString m_sCustomType;    ///< only used when m_Type == Custom
-  plVec3 m_vGlobalPosition = plVec3::MakeZero();
+  plVec3 m_vGlobalPosition = plVec3::MakeZero(); ///< broadcast origin; the radius is measured from here
   float m_fRadius = 20.0f;         ///< how far the stimulus carries
   float m_fStrength = 1.0f;        ///< [0,1] how strongly it drives target confidence
   plGameObjectHandle m_hSource;    ///< who caused the stimulus (becomes the perceived target)
   plHashedString m_sSourceTeam;    ///< team of the source, for faction filtering
+
+  plVec3 m_vEventPosition = plVec3::MakeZero(); ///< where the event happened, when it differs from the broadcast origin
+  bool m_bHasEventPosition = false;             ///< false: the event happened at m_vGlobalPosition
+  bool m_bReport = false;                       ///< relayed by an ally (squad share), not perceived first-hand
+
+  const plVec3& GetEventPosition() const { return m_bHasEventPosition ? m_vEventPosition : m_vGlobalPosition; }
 };
 
 /// \brief Send this message to any object (or broadcast it) to emit an AI stimulus.

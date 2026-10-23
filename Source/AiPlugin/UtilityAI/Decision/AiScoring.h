@@ -34,18 +34,41 @@ struct PL_AIPLUGIN_DLL plAiBehaviorCategory
 
 PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiBehaviorCategory);
 
+/// \brief How aware an agent is of threats, derived from its perceived targets.
+struct PL_AIPLUGIN_DLL plAiAlertLevel
+{
+  using StorageType = plUInt8;
+
+  enum Enum
+  {
+    Unaware,    ///< no remembered targets
+    Suspicious, ///< remembered targets were only heard (or came from custom stimuli)
+    Searching,  ///< a remembered target was seen, did damage or was reported by an ally, but not just now
+    Alert,      ///< a target was seen in the last second, or did damage in the last second
+
+    Default = Unaware
+  };
+};
+
+PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiAlertLevel);
+
 /// \brief A target that an AI agent knows about, with memory semantics.
 ///
-/// In Phase A1 these records are fed from plSensorComponent detections.
-/// The perception world module (Phase A2) extends them with stimulus-driven
-/// confidence gain/decay and last-known-position behavior.
+/// Records are fed by plSensorComponent detections (sight) and by stimuli from the
+/// plAiPerceptionWorldModule. Confidence decays with the settings of the sense that refreshed the
+/// record last.
 struct PL_AIPLUGIN_DLL plAiPerceivedTarget
 {
-  plGameObjectHandle m_hTarget;
-  plVec3 m_vLastKnownPosition = plVec3::MakeZero();
-  plVec3 m_vLastKnownVelocity = plVec3::MakeZero();
+  plGameObjectHandle m_hTarget;                     ///< invalid for events without a source, which are told apart by position
+  plVec3 m_vLastKnownPosition = plVec3::MakeZero(); ///< sight: the object; other senses: where the event happened
+  plVec3 m_vLastKnownVelocity = plVec3::MakeZero(); ///< only sight knows a velocity
   float m_fConfidence = 0.0f;  ///< 0 = about to be forgotten, 1 = fully perceived right now
   plTime m_LastStimulusTime;   ///< world time at which the last stimulus for this target arrived
+  plTime m_LastSightTime = plTime::MakeFromSeconds(-1000000.0); ///< world time the target was last seen
+
+  plUInt8 m_uiLastSense = 0; ///< plAiStimulusType of the latest update
+  plUInt8 m_uiSenses = 0;    ///< bit (1 << plAiStimulusType) per sense that contributed to this record
+  bool m_bReported = false;  ///< the latest update was relayed by an ally
 };
 
 /// \brief All data an plAiInput may read while scoring a behavior.
@@ -75,6 +98,9 @@ struct PL_AIPLUGIN_DLL plAiScoringContext
   /// How long ago the scored behavior was last deactivated on this agent. Very large if never.
   plTime m_TimeSinceDeactivation;
 
+  /// The agent's plAiAlertLevel when the decision was prepared.
+  plUInt8 m_uiAlertLevel = plAiAlertLevel::Unaware;
+
   /// \brief Reads a blackboard entry, transparently using the snapshot when scoring asynchronously.
   plVariant GetBlackboardValue(const plHashedString& sEntryName) const;
 };
@@ -91,5 +117,26 @@ struct PL_AIPLUGIN_DLL plAiBehaviorScore
   static float Compose(plAiBehaviorCategory::Enum category, float fUtility)
   {
     return static_cast<float>(category) + plMath::Clamp(fUtility, 0.0f, 0.999f);
+  }
+
+  /// \brief The category part of a composed score.
+  static plInt32 GetCategory(float fScore) { return static_cast<plInt32>(plMath::Floor(fScore)); }
+
+  /// \brief Whether a challenger replaces the active behavior.
+  ///
+  /// A higher category always wins. The commit bonus only defends against challengers of the same
+  /// category. An active behavior that no longer scores (fActiveScore <= 0) gives way to any challenger.
+  static bool ShouldReplaceActive(float fChallengerScore, float fActiveScore, float fCommitBonus)
+  {
+    if (fActiveScore <= 0.0f)
+      return fChallengerScore > 0.0f;
+
+    const plInt32 iChallengerCategory = GetCategory(fChallengerScore);
+    const plInt32 iActiveCategory = GetCategory(fActiveScore);
+
+    if (iChallengerCategory != iActiveCategory)
+      return iChallengerCategory > iActiveCategory;
+
+    return fChallengerScore > fActiveScore + fCommitBonus;
   }
 };

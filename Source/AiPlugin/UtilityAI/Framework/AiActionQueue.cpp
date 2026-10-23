@@ -55,9 +55,11 @@ void plAiActionQueue::Execute(plGameObject& owner, plTime tDiff, plLogInterface*
 
     if (res == plAiActionResult::Failed)
     {
+      // failing is part of play (the target moved out of reach, died, ...); the brain records it as the decision's
+      // outcome, which the AI Debugger shows
       plStringBuilder str;
       pCmd->GetDebugDesc(str);
-      plLog::Error("AI cmd failed: {}", str);
+      plLog::Dev(pLog, "AI cmd failed: {}", str);
 
       CancelCurrentActions(owner);
     }

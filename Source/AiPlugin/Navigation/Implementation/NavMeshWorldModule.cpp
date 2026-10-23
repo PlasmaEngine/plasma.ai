@@ -75,9 +75,9 @@ plAiNavMeshWorldModule::plAiNavMeshWorldModule(plWorld* pWorld)
 
 plAiNavMeshWorldModule::~plAiNavMeshWorldModule()
 {
-  for (const auto& cfg : m_Config.m_NavmeshConfigs)
+  for (auto it = m_WorldNavMeshes.GetIterator(); it.IsValid(); ++it)
   {
-    PL_DEFAULT_DELETE(m_WorldNavMeshes[cfg.m_sName]);
+    PL_DEFAULT_DELETE(it.Value());
   }
 }
 
@@ -98,9 +98,17 @@ void plAiNavMeshWorldModule::Initialize()
   for (const auto& cfg : m_Config.m_NavmeshConfigs)
   {
     // TODO: make tile size etc configurable
-    m_WorldNavMeshes[cfg.m_sName] = PL_DEFAULT_NEW(plAiNavMesh, cfg);
-  }
+    plAiNavMesh* pNavMesh = PL_DEFAULT_NEW(plAiNavMesh, cfg);
 
+    if (!pNavMesh->IsValid())
+    {
+      // already logged; callers treat a missing navmesh like an unknown config name
+      PL_DEFAULT_DELETE(pNavMesh);
+      continue;
+    }
+
+    m_WorldNavMeshes[cfg.m_sName] = pNavMesh;
+  }
 }
 
 void plAiNavMeshWorldModule::Deinitialize()
@@ -397,6 +405,7 @@ void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
 
       pSlot->m_pTask->m_pWorldNavMesh = pNavMesh;
       pSlot->m_pTask->m_SectorID = sectorID;
+      pSlot->m_pTask->m_pSector = &pNavMesh->BeginSectorBuild(sectorID);
       pSlot->m_pTask->m_pNavGeo = pNavGeo;
 
       // snapshot the nav links, obstacle boxes and blocker zones for this sector
@@ -581,12 +590,11 @@ void plAiNavMeshWorldModule::ApplyNavBlockers(plAiNavMesh& ref_navMesh, plArrayP
   }
 
   // pass 1: reset all affected regions (incl. the pre-move area of moved patches):
-  // clear the Blocked flag and restore avoid-zone polys to the default ground area.
-  // (blocker zone polys are always baked as default ground, so area 1 is the correct baseline)
+  // clear the Blocked flag and give avoid-zone polys back the ground type they were baked with
   for (plUInt32 uiPatch : patchesToApply)
   {
     const FlagPatch& patch = m_FlagPatches[uiPatch];
-    const plUInt8 uiResetArea = (patch.m_Mode == plAiNavObstacleMode::Avoid) ? 1 : 0xFF;
+    const plUInt8 uiResetArea = (patch.m_Mode == plAiNavObstacleMode::Avoid) ? plAiNavMesh::RestoreBakedArea : 0xFF;
 
     ref_navMesh.ApplyFlagPatch(patch.m_ClearBox, 0, plAiNavMeshPolyFlags::Blocked, uiResetArea);
   }
@@ -634,7 +642,7 @@ void plAiNavMeshWorldModule::InvalidateSectorsForBox(const plBoundingBox& worldB
 {
   for (auto& nm : m_WorldNavMeshes)
   {
-    nm.Value()->InvalidateSector(worldBox.GetCenter().GetAsVec2(), worldBox.GetHalfExtents().GetAsVec2(), true);
+    nm.Value()->InvalidateSector(worldBox.GetCenter().GetAsVec2(), worldBox.GetHalfExtents().GetAsVec2(), true, plAiNavMeshRebuildReason::Obstacle);
   }
 }
 
@@ -644,27 +652,46 @@ void plAiNavMeshWorldModule::InvalidateSectorsAtLinkEndpoints(const plAiNavLinkD
   {
     plAiNavMesh* pNavMesh = nm.Value();
 
-    pNavMesh->InvalidateSector(linkData.m_vStart.GetAsVec2(), plVec2(linkData.m_fRadius), true);
-    pNavMesh->InvalidateSector(linkData.m_vEnd.GetAsVec2(), plVec2(linkData.m_fRadius), true);
+    pNavMesh->InvalidateSector(linkData.m_vStart.GetAsVec2(), plVec2(linkData.m_fRadius), true, plAiNavMeshRebuildReason::NavLink);
+    pNavMesh->InvalidateSector(linkData.m_vEnd.GetAsVec2(), plVec2(linkData.m_fRadius), true, plAiNavMeshRebuildReason::NavLink);
   }
 }
 
+namespace
+{
+  constexpr plUInt32 s_uiNavLinkIndexBits = 20;
+  constexpr plUInt32 s_uiNavLinkIndexMask = (1u << s_uiNavLinkIndexBits) - 1;
+  constexpr plUInt32 s_uiNavLinkGenerationMask = 0x7FF; // 11 bits, so no ID equals InvalidNavLinkID
+
+  plAiNavMeshWorldModule::NavLinkID MakeNavLinkID(plUInt32 uiIndex, plUInt32 uiGeneration)
+  {
+    return (uiGeneration << s_uiNavLinkIndexBits) | uiIndex;
+  }
+} // namespace
+
 plAiNavMeshWorldModule::NavLinkID plAiNavMeshWorldModule::RegisterNavLink(const plAiNavLinkData& linkData, const plComponentHandle& hComponent)
 {
-  NavLinkID id = InvalidNavLinkID;
+  plUInt32 uiIndex = 0;
 
   if (!m_FreeNavLinks.IsEmpty())
   {
-    id = m_FreeNavLinks.PeekBack();
+    uiIndex = m_FreeNavLinks.PeekBack();
     m_FreeNavLinks.PopBack();
+
+    // the entry's previous ID may still be baked into tiles; the new one must differ
+    NavLink& reused = m_NavLinks[uiIndex];
+    reused.m_uiGeneration = static_cast<plUInt16>((reused.m_uiGeneration + 1) & s_uiNavLinkGenerationMask);
   }
   else
   {
-    id = m_NavLinks.GetCount();
+    uiIndex = m_NavLinks.GetCount();
+    PL_ASSERT_DEV(uiIndex <= s_uiNavLinkIndexMask, "Too many nav links");
     m_NavLinks.ExpandAndGetRef();
   }
 
-  NavLink& link = m_NavLinks[id];
+  NavLink& link = m_NavLinks[uiIndex];
+  const NavLinkID id = MakeNavLinkID(uiIndex, link.m_uiGeneration);
+
   link.m_Data = linkData;
   link.m_Data.m_uiUserID = id; // resolves back to this registry entry at traversal time
   link.m_hComponent = hComponent;
@@ -676,28 +703,43 @@ plAiNavMeshWorldModule::NavLinkID plAiNavMeshWorldModule::RegisterNavLink(const 
 
 void plAiNavMeshWorldModule::UnregisterNavLink(NavLinkID id)
 {
-  if (id >= m_NavLinks.GetCount() || !m_NavLinks[id].m_bInUse)
+  const NavLink* pLink = FindNavLink(id);
+  if (pLink == nullptr)
     return;
 
-  NavLink& link = m_NavLinks[id];
+  const plUInt32 uiIndex = id & s_uiNavLinkIndexMask;
+  NavLink& link = m_NavLinks[uiIndex];
   link.m_bInUse = false;
 
   InvalidateSectorsAtLinkEndpoints(link.m_Data); // rebake without this link
-  m_FreeNavLinks.PushBack(id);
+  m_FreeNavLinks.PushBack(uiIndex);
+}
+
+const plAiNavMeshWorldModule::NavLink* plAiNavMeshWorldModule::FindNavLink(NavLinkID id) const
+{
+  const plUInt32 uiIndex = id & s_uiNavLinkIndexMask;
+  if (uiIndex >= m_NavLinks.GetCount())
+    return nullptr;
+
+  const NavLink& link = m_NavLinks[uiIndex];
+  if (!link.m_bInUse || MakeNavLinkID(uiIndex, link.m_uiGeneration) != id)
+    return nullptr;
+
+  return &link;
 }
 
 plComponentHandle plAiNavMeshWorldModule::ResolveNavLink(plUInt32 uiUserID) const
 {
-  if (uiUserID < m_NavLinks.GetCount() && m_NavLinks[uiUserID].m_bInUse)
-    return m_NavLinks[uiUserID].m_hComponent;
+  if (const NavLink* pLink = FindNavLink(uiUserID))
+    return pLink->m_hComponent;
 
   return plComponentHandle();
 }
 
 plEnum<plAiNavLinkType> plAiNavMeshWorldModule::GetNavLinkType(plUInt32 uiUserID) const
 {
-  if (uiUserID < m_NavLinks.GetCount() && m_NavLinks[uiUserID].m_bInUse)
-    return m_NavLinks[uiUserID].m_Data.m_Type;
+  if (const NavLink* pLink = FindNavLink(uiUserID))
+    return pLink->m_Data.m_Type;
 
   return plAiNavLinkType::Jump;
 }

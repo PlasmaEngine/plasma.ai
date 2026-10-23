@@ -8,61 +8,14 @@
 #include <EditorFramework/Assets/AssetCurator.h>
 #include <Foundation/IO/FileSystem/FileReader.h>
 #include <Foundation/IO/OSFile.h>
-#include <Foundation/Math/ColorScheme.h>
 #include <Foundation/Serialization/AbstractObjectGraph.h>
 #include <Foundation/Serialization/DdlSerializer.h>
 #include <Foundation/Serialization/RttiConverter.h>
 #include <GuiFoundation/GuiFoundationDLL.h>
 #include <GuiFoundation/Widgets/CurveEditData.h>
 
-#include <QPainter>
-#include <QPainterPath>
-
 namespace plAiAssetUi
 {
-  static QColor ToQt(const plColor& c)
-  {
-    return plToQtColor(plColorGammaUB(c));
-  }
-
-  QColor AccentColor()
-  {
-    return ToQt(plColorScheme::GetCategoryColor("AI", plColorScheme::CategoryColorUsage::BorderColor));
-  }
-
-  QColor AccentColorDim()
-  {
-    plColor c = plColorScheme::GetCategoryColor("AI", plColorScheme::CategoryColorUsage::BorderColor);
-    return ToQt(c * 0.55f);
-  }
-
-  QColor CurveColor()
-  {
-    return ToQt(plColorScheme::LightUI(plColorScheme::Blue));
-  }
-
-  QColor CategoryColor(plInt32 iCategory)
-  {
-    switch (iCategory)
-    {
-      case plAiBehaviorCategory::Interrupt:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Red));
-      case plAiBehaviorCategory::Combat:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Orange));
-      case plAiBehaviorCategory::Command:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Yellow));
-      case plAiBehaviorCategory::Investigate:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Cyan));
-      case plAiBehaviorCategory::ActiveIdle:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Blue));
-      case plAiBehaviorCategory::Idle:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Gray));
-      case plAiBehaviorCategory::Fallback:
-      default:
-        return ToQt(plColorScheme::LightUI(plColorScheme::Gray) * 0.7f);
-    }
-  }
-
   const char* CategoryName(plInt32 iCategory)
   {
     switch (iCategory)
@@ -84,13 +37,6 @@ namespace plAiAssetUi
       default:
         return "<unknown>";
     }
-  }
-
-  QString PrettyInputName(const plRTTI* pRtti)
-  {
-    plStringBuilder sName;
-    GetPrettyInputName(pRtti, sName);
-    return QString::fromUtf8(sName.GetData());
   }
 
   void GetPrettyInputName(const plRTTI* pRtti, plStringBuilder& out_sName)
@@ -120,13 +66,6 @@ namespace plAiAssetUi
       out_sName.Append(uiChar);
       bPreviousUpper = bUpper;
     }
-  }
-
-  QString InputParamSummary(const plAiInput* pInput)
-  {
-    plStringBuilder sSummary;
-    GetInputParamSummary(pInput, sSummary);
-    return QString::fromUtf8(sSummary.GetData());
   }
 
   void GetInputParamSummary(const plAiInput* pInput, plStringBuilder& out_sSummary)
@@ -275,51 +214,6 @@ namespace plAiAssetUi
 
     return plMath::Clamp(fScore, 0.0f, 1.0f);
   }
-
-  void PaintCurve(QPainter& p, const QRectF& rect, const plCurve1D* pCurve, const QColor& curveColor, bool bLegacyDomain)
-  {
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing, true);
-
-    // inset background + grid
-    p.fillRect(rect, QColor(31, 32, 33));
-    QPen gridPen(QColor(44, 46, 48));
-    gridPen.setWidthF(1.0);
-    p.setPen(gridPen);
-    p.drawLine(QPointF(rect.left(), rect.center().y()), QPointF(rect.right(), rect.center().y()));
-    p.drawLine(QPointF(rect.center().x(), rect.top()), QPointF(rect.center().x(), rect.bottom()));
-
-    const double fPad = 2.0;
-    const QRectF inner = rect.adjusted(fPad, fPad, -fPad, -fPad);
-
-    QPainterPath path;
-    const plUInt32 uiSamples = 48;
-
-    for (plUInt32 i = 0; i <= uiSamples; ++i)
-    {
-      const double t = static_cast<double>(i) / uiSamples;
-      double fValue = t; // identity when no curve is set
-
-      if (pCurve != nullptr && !pCurve->IsEmpty())
-      {
-        fValue = plAiEvaluateResponseCurve(*pCurve, static_cast<float>(t), bLegacyDomain);
-      }
-
-      const QPointF pt(inner.left() + t * inner.width(), inner.bottom() - fValue * inner.height());
-
-      if (i == 0)
-        path.moveTo(pt);
-      else
-        path.lineTo(pt);
-    }
-
-    QPen curvePen(curveColor);
-    curvePen.setWidthF(2.0);
-    p.setPen(curvePen);
-    p.drawPath(path);
-
-    p.restore();
-  }
 } // namespace plAiAssetUi
 
 //////////////////////////////////////////////////////////////////////////
@@ -337,7 +231,7 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
 
   // resolve the reference through the curator
   plStringBuilder sAbsPath;
-  QString sAssetName;
+  plString sAssetName;
   {
     auto asset = plAssetCurator::GetSingleton()->FindSubAsset(sAssetRef);
     if (!asset.isValid() || asset->m_pAssetInfo == nullptr)
@@ -347,7 +241,7 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
     }
 
     sAbsPath = asset->m_pAssetInfo->m_Path.GetAbsolutePath();
-    sAssetName = QString::fromUtf8(asset->GetName().GetStartPointer(), static_cast<int>(asset->GetName().GetElementCount()));
+    sAssetName = asset->GetName();
   }
 
   plFileStats stats;
@@ -364,7 +258,7 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
 
   peek = plAiBehaviorPeek();
   peek.m_FileModified = stats.m_LastModificationTime;
-  peek.m_sAbsPath = QString::fromUtf8(sAbsPath.GetData());
+  peek.m_sAbsPath = sAbsPath;
 
   plFileReader file;
   if (file.Open(sAbsPath).Failed())
@@ -399,7 +293,7 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
   }
 
   peek.m_bValid = true;
-  peek.m_sName = obj.m_sName.IsEmpty() ? sAssetName : QString::fromUtf8(obj.m_sName.GetData());
+  peek.m_sName = obj.m_sName.IsEmpty() ? sAssetName : obj.m_sName;
   peek.m_iCategory = obj.m_Category.GetValue();
   peek.m_fWeight = obj.m_fWeight;
   peek.m_fCommitBonus = obj.m_fCommitBonus;
@@ -409,7 +303,7 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
   {
     plStringBuilder sLogic = obj.m_pLogic->GetDynamicRTTI()->GetTypeName();
     sLogic.TrimWordStart("plAiBehaviorLogic_");
-    peek.m_sLogic = QString::fromUtf8(sLogic.GetData());
+    peek.m_sLogic = sLogic;
   }
 
   for (const plAiConsiderationObject* pCons : obj.m_Considerations)
@@ -424,15 +318,21 @@ const plAiBehaviorPeek& plAiBehaviorPeekCache::Get(plStringView sAssetRef)
 
     if (pCons->m_pInput != nullptr)
     {
+      out.m_bHasInput = true;
       out.m_bNeedsTarget = pCons->m_pInput->NeedsTarget();
-      const QString sSummary = plAiAssetUi::InputParamSummary(pCons->m_pInput);
-      out.m_sLabel = plAiAssetUi::PrettyInputName(pCons->m_pInput->GetDynamicRTTI());
-      if (!sSummary.isEmpty())
-        out.m_sLabel += QString(" - %1").arg(sSummary);
+
+      plStringBuilder sLabel, sSummary;
+      plAiAssetUi::GetPrettyInputName(pCons->m_pInput->GetDynamicRTTI(), sLabel);
+      plAiAssetUi::GetInputParamSummary(pCons->m_pInput, sSummary);
+
+      if (!sSummary.IsEmpty())
+        sLabel.AppendFormat(" - {}", sSummary);
+
+      out.m_sLabel = sLabel;
     }
     else
     {
-      out.m_sLabel = QStringLiteral("<no input>");
+      out.m_sLabel = "<no input>";
     }
 
     plAiAssetUi::BuildRuntimeCurve(pCons->m_ResponseCurve, out.m_Curve);

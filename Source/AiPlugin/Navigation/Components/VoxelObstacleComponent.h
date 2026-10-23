@@ -9,8 +9,10 @@ using plAiVoxelObstacleComponentManager = plComponentManager<class plAiVoxelObst
 
 /// Represents a dynamic obstacle in the voxel navigation grid.
 ///
-/// When activated, injects its owner's bounding box into the voxel grid as occupied.
-/// When deactivated, removes it. Useful for doors, moving platforms, or spawned barriers.
+/// When activated, marks its owner's physics bounds as occupied in the voxel grid. When deactivated,
+/// frees them again, unless static geometry or another obstacle also occupies them. Useful for doors,
+/// moving platforms, or spawned barriers. The grid voxelizes only static shapes, so anything that
+/// moves and should block flying agents needs this component.
 class PL_AIPLUGIN_DLL plAiVoxelObstacleComponent : public plComponent
 {
   PL_DECLARE_COMPONENT_TYPE(plAiVoxelObstacleComponent, plComponent, plAiVoxelObstacleComponentManager);
@@ -36,6 +38,5 @@ private:
   void InjectIntoGrid();
   void RemoveFromGrid();
 
-  plBoundingBox m_LastInjectedBounds;
-  bool m_bInjected = false;
+  plUInt32 m_ObstacleID = plInvalidIndex; ///< registration with plAiVoxelWorldModule
 };

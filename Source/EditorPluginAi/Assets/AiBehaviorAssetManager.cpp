@@ -2,8 +2,7 @@
 
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
 #include <EditorPluginAi/Assets/AiBehaviorAssetManager.h>
-#include <EditorPluginAi/Assets/AiBehaviorAssetWindow.moc.h>
-#include <GuiFoundation/UIServices/ImageCache.moc.h>
+#include <EditorPluginAi/Assets/AiBehaviorAssetWindow.h>
 
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiBehaviorAssetDocumentManager, 1, plRTTIDefaultAllocator<plAiBehaviorAssetDocumentManager>)
 PL_END_DYNAMIC_REFLECTED_TYPE;
@@ -22,8 +21,6 @@ plAiBehaviorAssetDocumentManager::plAiBehaviorAssetDocumentManager()
 
   m_DocTypeDesc.m_sResourceFileExtension = "plAiBehavior";
   m_DocTypeDesc.m_AssetDocumentFlags = plAssetDocumentFlags::AutoTransformOnSave;
-
-  plQtImageCache::GetSingleton()->RegisterTypeImage("AiBehavior", QPixmap(":/AssetIcons/AiBehavior.svg"));
 }
 
 plAiBehaviorAssetDocumentManager::~plAiBehaviorAssetDocumentManager()
@@ -39,7 +36,7 @@ void plAiBehaviorAssetDocumentManager::OnDocumentManagerEvent(const plDocumentMa
     {
       if (e.m_pDocument->GetDynamicRTTI() == plGetStaticRTTI<plAiBehaviorAssetDocument>())
       {
-        new plQtAiBehaviorAssetDocumentWindow(e.m_pDocument); // NOLINT: not a memory leak
+        new plAiBehaviorAssetDocumentWindow(e.m_pDocument); // NOLINT: not a memory leak
       }
     }
     break;

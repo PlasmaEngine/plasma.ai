@@ -443,11 +443,10 @@ plUInt32 plAiEqsTest_Unclaimed::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAi
       item.m_TestData = plAiEqsTestData::MissingPayload;
       continue;
     }
+    // runs on a worker: only the tactical module's own data, never the smart object components
     plAiCoverPoint cover;
-    plVec3 position;
-    plComponentHandle component;
     if ((item.m_hCover.IsValid() && !ref_ctx.m_pTactical->ResolveCover(item.m_hCover, cover)) ||
-        (item.m_hSmartObject.IsValid() && !ref_ctx.m_pTactical->ResolveSmartObject(item.m_hSmartObject, position, component)))
+        (item.m_hSmartObject.IsValid() && !ref_ctx.m_pTactical->IsSmartObjectHandleCurrent(item.m_hSmartObject)))
     {
       item.m_TestData = plAiEqsTestData::StaleHandle;
       continue;
@@ -493,8 +492,11 @@ plUInt32 plAiEqsTest_LineOfSight::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<pl
     }
 
     // all rays of ONE item must fit the remaining budget, so a suspended query resumes cleanly at
-    // this item without re-casting half of its rays
-    if (ref_ctx.m_iRaycastBudget < static_cast<plInt32>(pSlot->m_Positions.GetCount()))
+    // this item without re-casting half of its rays. The first item of a run may overdraw the
+    // budget, so a context with more positions than the budget still makes progress.
+    const bool bFitsBudget = ref_ctx.m_iRaycastBudget >= static_cast<plInt32>(pSlot->m_Positions.GetCount());
+
+    if (!bFitsBudget && i > uiFirstItem)
       return i - uiFirstItem;
 
     const float fEyeHeight = item.m_hCover.IsValid() ? m_fCoverEyeHeight : m_fItemEyeHeight;
@@ -511,7 +513,7 @@ plUInt32 plAiEqsTest_LineOfSight::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<pl
 
       bool bBlocked = false;
 
-      if (fDist > 0.01f && ref_ctx.TryConsumeRaycast())
+      if (fDist > 0.01f && (ref_ctx.TryConsumeRaycast() || !bFitsBudget))
       {
         vDir /= fDist;
         plPhysicsCastResult hit;

@@ -1,5 +1,7 @@
 #include <AiPlugin/AiPluginPCH.h>
 
+#include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
+#include <AiPlugin/UtilityAI/Decision/AiStateMachineStates.h>
 #include <AiPlugin/UtilityAI/Decision/AiTacticalStates.h>
 #include <Core/Utils/Blackboard.h>
 #include <Core/World/World.h>
@@ -255,7 +257,7 @@ void plStateMachineState_AiPickTacticalPoint::OnExit(plStateMachineInstance& ref
 
   plWorld* pWorld = ref_instance.GetOwnerWorld();
 
-  if (pWorld == nullptr)
+  if (pWorld == nullptr || plAiBehaviorLogic::IsWorldShuttingDown())
     return;
 
   auto* pTactical = pWorld->GetModule<plAiTacticalWorldModule>();
@@ -301,6 +303,7 @@ plResult plStateMachineState_AiPickTacticalPoint::Serialize(plStreamWriter& inou
 plResult plStateMachineState_AiPickTacticalPoint::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_Preset;
   inout_stream >> m_ThreatSource;
@@ -410,6 +413,7 @@ plResult plStateMachineState_AiPickPeekPosition::Serialize(plStreamWriter& inout
 plResult plStateMachineState_AiPickPeekPosition::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_ThreatSource;
   inout_stream >> m_sThreatEntry;

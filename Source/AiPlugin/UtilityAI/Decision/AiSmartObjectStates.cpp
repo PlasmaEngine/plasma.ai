@@ -1,7 +1,9 @@
 #include <AiPlugin/AiPluginPCH.h>
 
 #include <AiPlugin/Tactical/Components/SmartObjectComponent.h>
+#include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
 #include <AiPlugin/UtilityAI/Decision/AiSmartObjectStates.h>
+#include <AiPlugin/UtilityAI/Decision/AiStateMachineStates.h>
 #include <Core/Utils/Blackboard.h>
 #include <Core/World/World.h>
 
@@ -116,7 +118,7 @@ void plStateMachineState_AiPickSmartObject::OnEnter(plStateMachineInstance& ref_
 
 void plStateMachineState_AiPickSmartObject::OnExit(plStateMachineInstance& ref_instance, void* pInstanceData, const plStateMachineState* pToState) const
 {
-  if (!m_bReleaseClaimOnExit)
+  if (!m_bReleaseClaimOnExit || plAiBehaviorLogic::IsWorldShuttingDown())
     return;
 
   plWorld* pWorld = ref_instance.GetOwnerWorld();
@@ -148,6 +150,7 @@ plResult plStateMachineState_AiPickSmartObject::Serialize(plStreamWriter& inout_
 plResult plStateMachineState_AiPickSmartObject::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_sType;
   inout_stream >> m_fSearchRadius;
@@ -189,8 +192,11 @@ plStateMachineState_AiUseSmartObject::plStateMachineState_AiUseSmartObject(plStr
 
 plStateMachineState_AiUseSmartObject::~plStateMachineState_AiUseSmartObject() = default;
 
-void plStateMachineState_AiUseSmartObject::ApplyUserEntries(plStateMachineInstance& ref_instance, const plComponentHandle& hComponent, bool bApply) const
+void plStateMachineState_AiUseSmartObject::ApplyUserEntries(plStateMachineInstance& ref_instance, InstanceData* pData, const plComponentHandle& hComponent) const
 {
+  pData->m_AppliedEntries.Clear();
+  pData->m_RevertValues.Clear();
+
   const plSharedPtr<plBlackboard>& pBlackboard = ref_instance.GetBlackboard();
 
   if (pBlackboard == nullptr)
@@ -203,24 +209,37 @@ void plStateMachineState_AiUseSmartObject::ApplyUserEntries(plStateMachineInstan
 
   for (const plBlackboardEntry& entry : pComponent->m_UserEntries)
   {
-    pBlackboard->SetEntryValue(entry.m_sName, bApply ? entry.m_InitialValue : MakeZeroValue(entry.m_InitialValue));
+    pBlackboard->SetEntryValue(entry.m_sName, entry.m_InitialValue);
+    pData->m_AppliedEntries.PushBack(entry.m_sName);
+    pData->m_RevertValues.PushBack(MakeZeroValue(entry.m_InitialValue));
   }
+}
+
+void plStateMachineState_AiUseSmartObject::RevertUserEntries(plStateMachineInstance& ref_instance, InstanceData* pData) const
+{
+  if (const plSharedPtr<plBlackboard>& pBlackboard = ref_instance.GetBlackboard())
+  {
+    for (plUInt32 i = 0; i < pData->m_AppliedEntries.GetCount(); ++i)
+    {
+      pBlackboard->SetEntryValue(pData->m_AppliedEntries[i], pData->m_RevertValues[i]);
+    }
+  }
+
+  pData->m_AppliedEntries.Clear();
+  pData->m_RevertValues.Clear();
 }
 
 void plStateMachineState_AiUseSmartObject::AbortUse(plStateMachineInstance& ref_instance, InstanceData* pData, plAiTacticalWorldModule* pTactical, plGameObject* pOwner) const
 {
-  if (pData->m_bStarted && pTactical != nullptr && pOwner != nullptr)
+  if (pData->m_bStarted)
   {
-    plAiSmartObjectHandle hSlot;
-    plVec3 vSlotPos;
-    plComponentHandle hComponent;
+    // from what was applied, not from the object: the object may be gone (that's often why the use was aborted)
+    RevertUserEntries(ref_instance, pData);
 
-    if (pTactical->GetClaimedSmartObject(pOwner->GetHandle(), hSlot) && pTactical->ResolveSmartObject(hSlot, vSlotPos, hComponent))
+    if (pTactical != nullptr && pOwner != nullptr)
     {
-      ApplyUserEntries(ref_instance, hComponent, false);
+      pTactical->EndUse(pOwner->GetHandle());
     }
-
-    pTactical->EndUse(pOwner->GetHandle());
   }
 
   pData->m_bStarted = false;
@@ -275,7 +294,7 @@ void plStateMachineState_AiUseSmartObject::OnEnter(plStateMachineInstance& ref_i
     pData->m_FinishAt = pWorld->GetClock().GetAccumulatedTime() + pComponent->m_UseDuration;
   }
 
-  ApplyUserEntries(ref_instance, hComponent, true);
+  ApplyUserEntries(ref_instance, pData, hComponent);
   SetBlackboardIntSo(ref_instance, m_sResultEntry, 0);
 }
 
@@ -320,14 +339,7 @@ void plStateMachineState_AiUseSmartObject::Update(plStateMachineInstance& ref_in
   if (!bFinished)
     return;
 
-  plVec3 vSlotPos;
-  plComponentHandle hComponent;
-
-  if (pTactical->ResolveSmartObject(hSlot, vSlotPos, hComponent))
-  {
-    ApplyUserEntries(ref_instance, hComponent, false);
-  }
-
+  RevertUserEntries(ref_instance, pData);
   pTactical->EndUse(pOwner->GetHandle());
 
   if (m_bReleaseClaimWhenDone)
@@ -344,7 +356,7 @@ void plStateMachineState_AiUseSmartObject::OnExit(plStateMachineInstance& ref_in
 {
   auto pData = static_cast<InstanceData*>(pInstanceData);
 
-  if (!pData->m_bStarted)
+  if (!pData->m_bStarted || plAiBehaviorLogic::IsWorldShuttingDown())
     return;
 
   // interrupted mid-use (behavior switch): revert entries, notify the object, keep the claim
@@ -370,6 +382,7 @@ plResult plStateMachineState_AiUseSmartObject::Serialize(plStreamWriter& inout_s
 plResult plStateMachineState_AiUseSmartObject::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_sResultEntry;
   inout_stream >> m_bReleaseClaimWhenDone;

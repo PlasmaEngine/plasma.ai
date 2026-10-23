@@ -8,11 +8,13 @@
 #include <Foundation/Serialization/GraphVersioning.h>
 #include <Foundation/Serialization/ReflectionSerializer.h>
 #include <Foundation/Utilities/AssetFileHeader.h>
+#include <Tests/AiTestCheck.h>
 #include <cstdio>
 
 static int s_Failures = 0;
 static int s_Checks = 0;
-static void Check(bool value, const char* message)
+
+void Check(bool value, const char* message)
 {
   ++s_Checks;
   if (!value)
@@ -313,6 +315,13 @@ int main(int argc, char** argv)
   TestMissingData();
   TestMeasurements();
   TestCompatibility();
+
+  RunBrainWorldTests();
+  RunEqsWorldTests();
+  RunNavigationTests();
+  RunVoxelTests();
+  RunEncounterTests();
+
   for (int i = 1; i < argc; ++i)
     CheckMigratedEqsResource(argv[i]);
   plStartup::ShutdownCoreSystems();

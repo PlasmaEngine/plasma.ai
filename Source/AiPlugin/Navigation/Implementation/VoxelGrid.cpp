@@ -25,6 +25,7 @@ void plVoxelGrid::Init(plUInt32 uiDimX, plUInt32 uiDimY, plUInt32 uiDimZ)
 
   m_Blocks.Clear();
   m_Blocks.SetCount(m_uiBlocksX * m_uiBlocksY * m_uiBlocksZ, 0ull);
+  m_Clearance.Clear();
 }
 
 void plVoxelGrid::ClearData()
@@ -147,19 +148,26 @@ bool plVoxelGrid::CheckVoxel(const plVec3I32& vCoord) const
   return (uiBlock & uiMask) != 0ull;
 }
 
+bool plVoxelGrid::GetCoordRange(const plBoundingBox& box, plVec3I32& out_vMin, plVec3I32& out_vMax) const
+{
+  WorldToCoord(box.m_vMin, out_vMin);
+  WorldToCoord(box.m_vMax, out_vMax);
+
+  out_vMin.x = plMath::Max(out_vMin.x, 0);
+  out_vMin.y = plMath::Max(out_vMin.y, 0);
+  out_vMin.z = plMath::Max(out_vMin.z, 0);
+  out_vMax.x = plMath::Min(out_vMax.x, (plInt32)m_uiDimX - 1);
+  out_vMax.y = plMath::Min(out_vMax.y, (plInt32)m_uiDimY - 1);
+  out_vMax.z = plMath::Min(out_vMax.z, (plInt32)m_uiDimZ - 1);
+
+  return out_vMin.x <= out_vMax.x && out_vMin.y <= out_vMax.y && out_vMin.z <= out_vMax.z;
+}
+
 void plVoxelGrid::InjectBox(const plBoundingBox& box)
 {
   plVec3I32 vMin, vMax;
-  WorldToCoord(box.m_vMin, vMin);
-  WorldToCoord(box.m_vMax, vMax);
-
-  // Clamp to valid range
-  vMin.x = plMath::Max(vMin.x, 0);
-  vMin.y = plMath::Max(vMin.y, 0);
-  vMin.z = plMath::Max(vMin.z, 0);
-  vMax.x = plMath::Min(vMax.x, (plInt32)m_uiDimX - 1);
-  vMax.y = plMath::Min(vMax.y, (plInt32)m_uiDimY - 1);
-  vMax.z = plMath::Min(vMax.z, (plInt32)m_uiDimZ - 1);
+  if (!GetCoordRange(box, vMin, vMax))
+    return;
 
   for (plInt32 z = vMin.z; z <= vMax.z; ++z)
   {
@@ -211,15 +219,8 @@ void plVoxelGrid::InjectSphere(const plVec3& vCenter, float fRadius)
 void plVoxelGrid::SubtractBox(const plBoundingBox& box)
 {
   plVec3I32 vMin, vMax;
-  WorldToCoord(box.m_vMin, vMin);
-  WorldToCoord(box.m_vMax, vMax);
-
-  vMin.x = plMath::Max(vMin.x, 0);
-  vMin.y = plMath::Max(vMin.y, 0);
-  vMin.z = plMath::Max(vMin.z, 0);
-  vMax.x = plMath::Min(vMax.x, (plInt32)m_uiDimX - 1);
-  vMax.y = plMath::Min(vMax.y, (plInt32)m_uiDimY - 1);
-  vMax.z = plMath::Min(vMax.z, (plInt32)m_uiDimZ - 1);
+  if (!GetCoordRange(box, vMin, vMax))
+    return;
 
   for (plInt32 z = vMin.z; z <= vMax.z; ++z)
   {
@@ -253,25 +254,148 @@ bool plVoxelGrid::IsVisibleCoord(const plVec3I32& vStart, const plVec3I32& vGoal
   float fY = (float)vStart.y;
   float fZ = (float)vStart.z;
 
-  for (plInt32 i = 0; i < iSteps; ++i)
+  plVec3I32 vPrevious = vStart;
+
+  for (plInt32 i = 0; i <= iSteps; ++i)
   {
     const plVec3I32 vCoord(
       (plInt32)plMath::Round(fX),
       (plInt32)plMath::Round(fY),
       (plInt32)plMath::Round(fZ));
 
-    if (vCoord.x == vGoal.x && vCoord.y == vGoal.y && vCoord.z == vGoal.z)
-      return true;
-
     if (CheckVoxel(vCoord))
       return false;
 
+    // a diagonal step passes the voxels on its sides: they must be free as well
+    const plVec3I32 vStep = vCoord - vPrevious;
+    if (plMath::Abs(vStep.x) + plMath::Abs(vStep.y) + plMath::Abs(vStep.z) > 1)
+    {
+      for (plInt32 iMask = 1; iMask < 7; ++iMask)
+      {
+        const plVec3I32 vSide(vPrevious.x + ((iMask & 1) ? vStep.x : 0), vPrevious.y + ((iMask & 2) ? vStep.y : 0), vPrevious.z + ((iMask & 4) ? vStep.z : 0));
+
+        if (vSide != vCoord && CheckVoxel(vSide))
+          return false;
+      }
+    }
+
+    if (vCoord == vGoal)
+      return true;
+
+    vPrevious = vCoord;
     fX += fXIncr;
     fY += fYIncr;
     fZ += fZIncr;
   }
 
   return true;
+}
+
+void plVoxelGrid::BuildClearance()
+{
+  if (m_Blocks.IsEmpty())
+    return;
+
+  m_Clearance.SetCountUninitialized(m_uiDimX * m_uiDimY * m_uiDimZ);
+  ComputeClearance(plVec3I32(0, 0, 0), plVec3I32(m_uiDimX - 1, m_uiDimY - 1, m_uiDimZ - 1));
+}
+
+void plVoxelGrid::UpdateClearance(const plBoundingBox& changedRegion)
+{
+  if (m_Clearance.IsEmpty())
+    return;
+
+  plVec3I32 vMin, vMax;
+  if (!GetCoordRange(changedRegion, vMin, vMax))
+    return;
+
+  // a changed voxel affects the clearance of every voxel up to MaxClearance away
+  const plInt32 iReach = MaxClearance;
+  vMin = plVec3I32(plMath::Max(vMin.x - iReach, 0), plMath::Max(vMin.y - iReach, 0), plMath::Max(vMin.z - iReach, 0));
+  vMax = plVec3I32(plMath::Min<plInt32>(vMax.x + iReach, m_uiDimX - 1), plMath::Min<plInt32>(vMax.y + iReach, m_uiDimY - 1), plMath::Min<plInt32>(vMax.z + iReach, m_uiDimZ - 1));
+
+  ComputeClearance(vMin, vMax);
+}
+
+plUInt8 plVoxelGrid::GetClearance(const plVec3I32& vCoord) const
+{
+  if (m_Clearance.IsEmpty() || !IsCoordValid(vCoord))
+    return MaxClearance;
+
+  return m_Clearance[GetVoxelIndex(vCoord)];
+}
+
+void plVoxelGrid::ComputeClearance(const plVec3I32& vMin, const plVec3I32& vMax)
+{
+  // The distance to the nearest occupied voxel along any axis or diagonal is separable: a 1D distance pass
+  // per axis, each combining with max(). The working box extends MaxClearance beyond [vMin, vMax], so
+  // occupied voxels just outside still count; voxels outside the grid count as free.
+  const plInt32 iReach = MaxClearance;
+  const plVec3I32 vWorkMin(plMath::Max(vMin.x - iReach, 0), plMath::Max(vMin.y - iReach, 0), plMath::Max(vMin.z - iReach, 0));
+  const plVec3I32 vWorkMax(plMath::Min<plInt32>(vMax.x + iReach, m_uiDimX - 1), plMath::Min<plInt32>(vMax.y + iReach, m_uiDimY - 1), plMath::Min<plInt32>(vMax.z + iReach, m_uiDimZ - 1));
+  const plVec3I32 vSize = vWorkMax - vWorkMin + plVec3I32(1, 1, 1);
+
+  auto WorkIndex = [&](plInt32 x, plInt32 y, plInt32 z) { return ((plUInt32)z * vSize.y + (plUInt32)y) * vSize.x + (plUInt32)x; };
+
+  plDynamicArray<plUInt8> work;
+  work.SetCountUninitialized(vSize.x * vSize.y * vSize.z);
+
+  for (plInt32 z = 0; z < vSize.z; ++z)
+    for (plInt32 y = 0; y < vSize.y; ++y)
+      for (plInt32 x = 0; x < vSize.x; ++x)
+        work[WorkIndex(x, y, z)] = CheckVoxel(vWorkMin + plVec3I32(x, y, z)) ? 0 : MaxClearance;
+
+  plDynamicArray<plUInt8> line;
+
+  // one pass along an axis: d(i) = min over |k| <= MaxClearance of max(|k|, d(i + k))
+  auto Pass = [&](plInt32 iAxis) {
+    const plInt32 iLength = (iAxis == 0) ? vSize.x : ((iAxis == 1) ? vSize.y : vSize.z);
+    const plInt32 iOtherA = (iAxis == 0) ? vSize.y : vSize.x;
+    const plInt32 iOtherB = (iAxis == 2) ? vSize.y : vSize.z;
+    line.SetCountUninitialized(iLength);
+
+    for (plInt32 b = 0; b < iOtherB; ++b)
+    {
+      for (plInt32 a = 0; a < iOtherA; ++a)
+      {
+        auto Index = [&](plInt32 i) {
+          if (iAxis == 0)
+            return WorkIndex(i, a, b);
+          if (iAxis == 1)
+            return WorkIndex(a, i, b);
+          return WorkIndex(a, b, i);
+        };
+
+        for (plInt32 i = 0; i < iLength; ++i)
+        {
+          line[i] = work[Index(i)];
+        }
+
+        for (plInt32 i = 0; i < iLength; ++i)
+        {
+          plUInt8 uiBest = line[i];
+
+          for (plInt32 k = 1; k < uiBest; ++k)
+          {
+            const plUInt8 uiLeft = (i - k >= 0) ? line[i - k] : MaxClearance;
+            const plUInt8 uiRight = (i + k < iLength) ? line[i + k] : MaxClearance;
+            uiBest = plMath::Min<plUInt8>(uiBest, plMath::Max<plUInt8>(static_cast<plUInt8>(k), plMath::Min(uiLeft, uiRight)));
+          }
+
+          work[Index(i)] = uiBest;
+        }
+      }
+    }
+  };
+
+  Pass(0);
+  Pass(1);
+  Pass(2);
+
+  for (plInt32 z = vMin.z; z <= vMax.z; ++z)
+    for (plInt32 y = vMin.y; y <= vMax.y; ++y)
+      for (plInt32 x = vMin.x; x <= vMax.x; ++x)
+        m_Clearance[GetVoxelIndex(plVec3I32(x, y, z))] = work[WorkIndex(x - vWorkMin.x, y - vWorkMin.y, z - vWorkMin.z)];
 }
 
 bool plVoxelGrid::IsVisible(const plVec3& vObserver, const plVec3& vSubject) const

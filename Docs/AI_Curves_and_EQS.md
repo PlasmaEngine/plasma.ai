@@ -137,4 +137,5 @@ its test index and current measurement. Recent query debug history remains bound
 
 The package's `AiSemanticsTests` executable target covers curve boundaries, legacy
 compatibility, utility/EQS serialization, numeric/boolean filters, inversion, missing-data
-policies, measurements, and trace recording. See the package's `Tests/README.md` for commands.
+policies, measurements, and trace recording. Its world tests cover the runtime rules in
+[AI runtime rules](AI_Runtime_Rules.md). See the package's `Tests/README.md` for commands.

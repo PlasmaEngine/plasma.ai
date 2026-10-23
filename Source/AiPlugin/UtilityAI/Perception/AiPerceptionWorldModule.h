@@ -27,14 +27,28 @@ public:
   struct TimedStimulus
   {
     plAiStimulus m_Stimulus;
-    plTime m_Timestamp; ///< world time at which the stimulus was published
+    plTime m_Timestamp;        ///< world time at which the stimulus was published
+    plUInt64 m_uiSequence = 0; ///< publication order, starting at 1
   };
 
-  /// \brief Recently published stimuli (rolling window, so that agents with slow decision rates don't miss any).
+  /// \brief Recently published stimuli: kept until every agent has processed them (see SetProcessedSequence), so agents
+  /// with slow decision rates, or held back by the decision budget, don't miss any.
   ///
-  /// Consumers remember the timestamp up to which they already processed stimuli and only handle newer ones.
-  /// Only valid to read during the PostAsync phase.
+  /// Consumers remember the sequence number up to which they already processed stimuli and only handle
+  /// newer ones. Sequence numbers don't depend on which module updates first within a frame.
   plArrayPtr<const TimedStimulus> GetRecentStimuli() const { return m_RecentStimuli; }
+
+  /// \brief The sequence number of the newest published stimulus, 0 if none was published yet.
+  plUInt64 GetLatestStimulusSequence() const { return m_uiLatestSequence; }
+
+  /// \brief Every agent has processed the stimuli up to this sequence number, so they can be dropped.
+  ///
+  /// The brain reports it once per frame. Stimuli stay at least s_MinKeep (for other readers) and at most s_MaxKeep (an
+  /// agent that never decides doesn't keep them forever).
+  void SetProcessedSequence(plUInt64 uiSequence) { m_uiProcessedSequence = uiSequence; }
+
+  static constexpr plTime s_MinKeep = plTime::MakeFromSeconds(0.5);
+  static constexpr plTime s_MaxKeep = plTime::MakeFromSeconds(30.0);
 
   const plAiFactionConfig& GetFactionConfig() const { return m_FactionConfig; }
 
@@ -52,6 +66,8 @@ private:
   plMutex m_QueueMutex;
   plDynamicArray<plAiStimulus> m_Queue;
   plDynamicArray<TimedStimulus> m_RecentStimuli;
+  plUInt64 m_uiLatestSequence = 0;
+  plUInt64 m_uiProcessedSequence = 0;
 
   plAiFactionConfig m_FactionConfig;
 };

@@ -42,7 +42,31 @@ struct plAiNavMeshInputGeo final
   plDynamicArray<plUInt8> m_TriangleAreaIDs;
 };
 
+/// \brief Why a navmesh sector was (re)built.
+enum class plAiNavMeshRebuildReason : plUInt8
+{
+  None,       ///< never built
+  FirstBuild, ///< requested for the first time
+  Obstacle,   ///< an obstacle, carve or blocker changed
+  NavLink,    ///< a nav link was added, moved or removed
+  Requested,  ///< game code or a script asked for it
+  Changed,    ///< something else invalidated it
+};
+
+/// \brief What a navmesh sector is doing, for status displays.
+enum class plAiNavMeshSectorState : plUInt8
+{
+  Queued,     ///< requested, waiting for a build slot
+  Building,   ///< a first build is running
+  Ready,      ///< built and in use
+  Rebuilding, ///< in use while a rebuild is queued or running
+  Failed,     ///< the last build failed; the sector has no polygons
+};
+
 /// \brief State about a single sector (tile / cell) of an plAiNavMesh
+///
+/// The flags belong to the main thread. While a build runs, its task only writes m_NavmeshDataNew and
+/// the build results below; FinalizeSectorUpdates reads them on the main thread once the task reported.
 struct plAiNavMeshSector final
 {
   plAiNavMeshSector();
@@ -50,12 +74,38 @@ struct plAiNavMeshSector final
 
   plUInt8 m_FlagRequested : 1;
   plUInt8 m_FlagInvalidate : 1;
-  plUInt8 m_FlagUpdateAvailable : 1;
+  plUInt8 m_FlagBuilding : 1; ///< a build was dispatched and hasn't been finalized yet
   plUInt8 m_FlagUsable : 1;
+  plUInt8 m_FlagDirtyDuringBuild : 1; ///< invalidated while building; rebuilt once the build is finalized
+  plUInt8 m_FlagLastBuildFailed : 1;
+
+  plAiNavMeshRebuildReason m_PendingReason = plAiNavMeshRebuildReason::FirstBuild; ///< for the next build
+  plAiNavMeshRebuildReason m_BuildReason = plAiNavMeshRebuildReason::None;         ///< of the running build
+  plAiNavMeshRebuildReason m_LastReason = plAiNavMeshRebuildReason::None;          ///< of the last finished build
+  plUInt32 m_uiBuildCount = 0;
+
+  // written by the build task
+  plDataBuffer m_NavmeshDataNew;
+  plUInt32 m_uiBuildPolyCount = 0;
+  plTime m_BuildDuration;
+  bool m_bBuildFailed = false;
 
   plDataBuffer m_NavmeshDataCur;
-  plDataBuffer m_NavmeshDataNew;
   dtTileRef m_TileRef = 0;
+  plUInt32 m_uiPolyCount = 0; ///< of the tile in use
+  plTime m_LastBuildDuration;
+};
+
+/// \brief One sector's status, for the navmesh panel.
+struct plAiNavMeshSectorStatus
+{
+  plUInt32 m_uiSectorID = 0;
+  plVec2I32 m_vCoord = plVec2I32::MakeZero();
+  plAiNavMeshSectorState m_State = plAiNavMeshSectorState::Queued;
+  plAiNavMeshRebuildReason m_LastReason = plAiNavMeshRebuildReason::None;
+  plUInt32 m_uiPolyCount = 0;
+  plUInt32 m_uiBuildCount = 0;
+  plTime m_LastBuildDuration;
 };
 
 /// \brief A navmesh generated with a specific configuration.
@@ -74,6 +124,9 @@ class PL_AIPLUGIN_DLL plAiNavMesh final
 public:
   plAiNavMesh(const plAiNavmeshConfig& navmeshConfig);
   ~plAiNavMesh();
+
+  /// \brief False when the Detour navmesh could not be initialized for the configured sector grid.
+  bool IsValid() const { return m_bValid; }
 
   using SectorID = plUInt32;
 
@@ -101,14 +154,27 @@ public:
   /// Invalidated sectors are considered out of date and must be rebuilt before they can be used again.
   /// If bRebuildAsSoonAsPossible is true, the sector is queued to be rebuilt as soon as possible.
   /// Otherwise, it will be unloaded and will not be rebuilt until it is requested again.
-  void InvalidateSector(SectorID sectorID, bool bRebuildAsSoonAsPossible);
+  ///
+  /// An invalidation that arrives while the sector is being built makes it rebuild once that build finished.
+  void InvalidateSector(SectorID sectorID, bool bRebuildAsSoonAsPossible, plAiNavMeshRebuildReason reason = plAiNavMeshRebuildReason::Changed);
 
   /// \brief Marks all sectors within the given rectangle as invalidated.
   ///
   /// Invalidated sectors are considered out of date and must be rebuilt before they can be used again.
   /// If bRebuildAsSoonAsPossible is true, the sector is queued to be rebuilt as soon as possible.
   /// Otherwise, it will be unloaded and will not be rebuilt until it is requested again.
-  void InvalidateSector(const plVec2& vCenter, const plVec2& vHalfExtents, bool bRebuildAsSoonAsPossible);
+  void InvalidateSector(const plVec2& vCenter, const plVec2& vHalfExtents, bool bRebuildAsSoonAsPossible, plAiNavMeshRebuildReason reason = plAiNavMeshRebuildReason::Changed);
+
+  /// \brief Marks a sector as being built and returns it for the build task. Main thread only.
+  ///
+  /// The returned sector stays valid (sectors are never removed); the task must only write its build results.
+  plAiNavMeshSector& BeginSectorBuild(SectorID sectorID);
+
+  /// \brief The status of every sector that was ever requested. Main thread only.
+  void GetSectorStatus(plDynamicArray<plAiNavMeshSectorStatus>& out_status) const;
+
+  /// \brief The most polygons one sector can hold; sectors close to it should be made smaller.
+  static constexpr plUInt32 MaxPolysPerSector = 1 << 16;
 
   /// \brief Swaps finished sector builds into the dtNavMesh (tile add/remove). Main thread only.
   ///
@@ -142,11 +208,16 @@ public:
   ///
   /// This is how doors and other togglable blockers work: no rebuild, no data change, just flag
   /// bits that the path search filters include/exclude. uiSetArea != 0xFF additionally rewrites
-  /// the polygon area id (used to toggle soft avoidance zones, plAiNavMeshAvoidZoneAreaID).
+  /// the polygon area id (used to toggle soft avoidance zones, plAiNavMeshAvoidZoneAreaID); the area
+  /// it replaces is remembered, and RestoreBakedArea puts it back.
   /// Main thread only (mutates the dtNavMesh). Returns the number of polygons touched.
   plUInt32 ApplyFlagPatch(const plBoundingBox& worldBox, plUInt16 uiSetFlags, plUInt16 uiClearFlags, plUInt8 uiSetArea = 0xFF);
 
-  void BuildSector(SectorID sectorID, const plNavmeshGeoWorldModuleInterface* pGeo, plArrayPtr<const plAiNavLinkData> links, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones);
+  /// For ApplyFlagPatch: restore the area a previous patch replaced (the ground type baked into the polygon).
+  static constexpr plUInt8 RestoreBakedArea = 0xFE;
+
+  /// \brief Builds a sector returned by BeginSectorBuild. Runs on a worker thread.
+  void BuildSector(plAiNavMeshSector& ref_sector, SectorID sectorID, const plNavmeshGeoWorldModuleInterface* pGeo, plArrayPtr<const plAiNavLinkData> links, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones);
 
   const dtNavMesh* GetDetourNavMesh() const { return m_pNavMesh; }
 
@@ -165,6 +236,7 @@ private:
   float m_fInvSectorMetersXY = 0;
 
   dtNavMesh* m_pNavMesh = nullptr;
+  bool m_bValid = false;
   plMap<SectorID, plAiNavMeshSector> m_Sectors;
   plDynamicArray<SectorID> m_RequestedSectors;
   plAtomicInteger32 m_uiNavMeshGeneration = 0;
@@ -177,4 +249,11 @@ private:
   // lazily initialized scratch query for ApplyFlagPatch
   dtNavMeshQuery m_FlagPatchQuery;
   bool m_bFlagPatchQueryInitialized = false;
+
+  /// polygon -> the area ApplyFlagPatch replaced; entries of rebuilt or unloaded tiles are dropped when tiles change
+  plHashTable<plUInt64, plUInt8> m_PatchedAreas;
+  void DropStalePatchedAreas();
+
+  /// Sets/clears the flags of the nav links with an end inside the box (ApplyFlagPatch's polygon query skips them).
+  plUInt32 PatchNavLinks(const plBoundingBox& containTest, plUInt16 uiSetFlags, plUInt16 uiClearFlags);
 };

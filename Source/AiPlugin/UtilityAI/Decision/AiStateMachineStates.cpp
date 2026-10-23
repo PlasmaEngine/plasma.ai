@@ -1,6 +1,7 @@
 #include <AiPlugin/AiPluginPCH.h>
 
 #include <AiPlugin/Navigation/Components/NavigationComponent.h>
+#include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
 #include <AiPlugin/UtilityAI/Decision/AiStateMachineStates.h>
 #include <AiPlugin/UtilityAI/Impl/GameAiActions.h>
 #include <Core/Utils/Blackboard.h>
@@ -57,6 +58,17 @@ namespace
   }
 } // namespace
 
+plResult plAiCheckStateVersion(const plRTTI* pType)
+{
+  const plUInt32 uiStored = plTypeVersionReadContext::GetContext()->GetTypeVersion(pType);
+
+  if (uiStored <= pType->GetTypeVersion())
+    return PL_SUCCESS;
+
+  plLog::Error("'{}' was saved by a newer plasma.ai (type version {}, this one reads up to {}). Update the plugin or re-save the state machine.", pType->GetTypeName(), uiStored, pType->GetTypeVersion());
+  return PL_FAILURE;
+}
+
 plStateMachineState_AiNavigateTo::plStateMachineState_AiNavigateTo(plStringView sName)
   : plStateMachineState(sName)
 {
@@ -111,6 +123,9 @@ void plStateMachineState_AiNavigateTo::OnEnter(plStateMachineInstance& ref_insta
 void plStateMachineState_AiNavigateTo::OnExit(plStateMachineInstance& ref_instance, void* pInstanceData, const plStateMachineState* pToState) const
 {
   auto pData = static_cast<InstanceData*>(pInstanceData);
+
+  if (plAiBehaviorLogic::IsWorldShuttingDown())
+    return;
 
   if (pData->m_bNavigationStarted && !pData->m_bFinished)
   {
@@ -195,6 +210,7 @@ plResult plStateMachineState_AiNavigateTo::Serialize(plStreamWriter& inout_strea
 plResult plStateMachineState_AiNavigateTo::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_sTargetPositionEntry;
   inout_stream >> m_sResultEntry;
@@ -304,6 +320,7 @@ plResult plStateMachineState_AiSetBlackboardEntries::Serialize(plStreamWriter& i
 plResult plStateMachineState_AiSetBlackboardEntries::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   ReadBlackboardEntries(inout_stream, m_OnEnterEntries);
   ReadBlackboardEntries(inout_stream, m_OnExitEntries);
@@ -395,6 +412,7 @@ plResult plStateMachineState_AiWait::Serialize(plStreamWriter& inout_stream) con
 plResult plStateMachineState_AiWait::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_MinDuration;
   inout_stream >> m_MaxDuration;
@@ -750,6 +768,7 @@ plResult plStateMachineState_AiPickPatrolPoint::Serialize(plStreamWriter& inout_
 plResult plStateMachineState_AiPickPatrolPoint::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
   const plUInt32 uiVersion = plTypeVersionReadContext::GetContext()->GetTypeVersion(GetStaticRTTI());
 
   inout_stream >> m_Mode;
@@ -915,7 +934,8 @@ void plStateMachineState_AiRunActions::OnExit(plStateMachineInstance& ref_instan
 {
   auto pData = static_cast<InstanceData*>(pInstanceData);
 
-  if (plGameObject* pOwner = GetOwnerObject(ref_instance))
+  plGameObject* pOwner = plAiBehaviorLogic::IsWorldShuttingDown() ? nullptr : GetOwnerObject(ref_instance);
+  if (pOwner != nullptr)
   {
     pData->m_Queue.CancelCurrentActions(*pOwner);
   }
@@ -973,6 +993,7 @@ plResult plStateMachineState_AiRunActions::Serialize(plStreamWriter& inout_strea
 plResult plStateMachineState_AiRunActions::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_sResultEntry;
   inout_stream >> m_bEndBehaviorWhenDone;

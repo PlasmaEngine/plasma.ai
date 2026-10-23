@@ -45,12 +45,24 @@ void plAiPerceptionWorldModule::UpdateDrainStimuli(const UpdateContext& context)
 {
   const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
 
-  // evict stimuli that even the slowest decision tier has had a chance to see
-  constexpr plTime keepDuration = plTime::MakeFromSeconds(3.0);
-
-  while (!m_RecentStimuli.IsEmpty() && (now - m_RecentStimuli[0].m_Timestamp) > keepDuration)
+  // drop the oldest stimuli that every agent has processed, or that are too old to matter; the array is in publication
+  // order, so they form its front
+  plUInt32 uiDrop = 0;
+  while (uiDrop < m_RecentStimuli.GetCount())
   {
-    m_RecentStimuli.RemoveAtAndCopy(0);
+    const TimedStimulus& stimulus = m_RecentStimuli[uiDrop];
+    const plTime age = now - stimulus.m_Timestamp;
+    const bool bProcessed = stimulus.m_uiSequence <= m_uiProcessedSequence && age > s_MinKeep;
+
+    if (!bProcessed && age <= s_MaxKeep)
+      break;
+
+    ++uiDrop;
+  }
+
+  if (uiDrop > 0)
+  {
+    m_RecentStimuli.RemoveAtAndCopy(0, uiDrop);
   }
 
   PL_LOCK(m_QueueMutex);
@@ -60,6 +72,7 @@ void plAiPerceptionWorldModule::UpdateDrainStimuli(const UpdateContext& context)
     auto& entry = m_RecentStimuli.ExpandAndGetRef();
     entry.m_Stimulus = stimulus;
     entry.m_Timestamp = now;
+    entry.m_uiSequence = ++m_uiLatestSequence;
   }
 
   m_Queue.Clear();

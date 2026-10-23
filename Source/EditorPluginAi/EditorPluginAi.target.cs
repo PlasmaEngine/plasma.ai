@@ -13,6 +13,7 @@ public class EditorPluginAiTarget : TargetRules
         UseAdaptiveUnityBuild = true;
         UseIncrementalLinking = true;
         TargetDependencies.Add("AiPlugin");
+        TargetDependencies.Add("EnginePluginAi"); // the debugger talks to it; built with the editor plugin
         ExtraModules.Add("EditorPluginAiModule");
         ExtraModules.Add("RecastModule");
     }

@@ -6,6 +6,7 @@ plCVarBool cvar_AiAgentsShowScores("AI.Agents.ShowScores", false, plCVarFlags::D
 plCVarBool cvar_AiAgentsShowHistory("AI.Agents.ShowHistory", false, plCVarFlags::Default, "Render the per-agent behavior switch history.");
 plCVarBool cvar_AiAgentsShowPerception("AI.Agents.ShowPerception", false, plCVarFlags::Default, "Render perceived target records.");
 plCVarString cvar_AiAgentsDebugFilter("AI.Agents.DebugFilter", "", plCVarFlags::Default, "Only agents whose object name contains this string show debug info. Empty = all agents.");
+plCVarBool cvar_AiAgentsDebugWatchedOnly("AI.Agents.DebugWatchedOnly", false, plCVarFlags::Default, "Only agents a debugging tool watches (the AI Debugger's selection) show debug info.");
 plCVarInt cvar_AiAgentsMaxDecisionsPerFrame("AI.Agents.MaxDecisionsPerFrame", 32, plCVarFlags::Default, "Upper bound of full decision (scoring) passes per frame across all agents.");
 plCVarFloat cvar_AiAgentsDecisionHz("AI.Agents.DecisionHz", 5.0f, plCVarFlags::Default, "How often each agent re-evaluates its behavior choice, in Hz (Hot LOD tier).");
 plCVarBool cvar_AiAgentsAsyncScoring("AI.Agents.AsyncScoring", true, plCVarFlags::Default, "Score utility behaviors in parallel in the async world update phase.");

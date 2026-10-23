@@ -112,7 +112,7 @@ public:
   SmartObjectID RegisterSmartObject(plComponentHandle hComponent);
   void UnregisterSmartObject(SmartObjectID id); // force-releases all claims on it
 
-  /// \brief Finds the nearest FREE slot of a matching smart object within fRadius (XY).
+  /// \brief Finds the nearest FREE slot of a matching smart object within fRadius (XY). An empty type matches any.
   bool FindSmartObject(const plVec3& vPosition, float fRadius, const plTempHashedString& sType, plGameObjectHandle hClaimant, plAiSmartObjectHandle& out_hSlot, plVec3& out_vSlotPosition) const;
 
   bool ClaimSmartObject(const plAiSmartObjectHandle& hSlot, plGameObjectHandle hClaimant, plTime timeout);
@@ -121,6 +121,10 @@ public:
 
   /// \brief Resolves a slot handle to its current world position and the owning component.
   bool ResolveSmartObject(const plAiSmartObjectHandle& hSlot, plVec3& out_vSlotPosition, plComponentHandle& out_hComponent) const;
+
+  /// \brief Whether a slot handle still refers to a registered smart object. Reads only this module's data, so EQS tests
+  /// on worker threads may call it.
+  bool IsSmartObjectHandleCurrent(const plAiSmartObjectHandle& hSlot) const;
 
   /// \brief Starts using the claimed smart object: sends the start message to its owner.
   /// Returns whether game code HANDLED it (false = caller runs the built-in UseDuration wait).
@@ -212,7 +216,8 @@ private:
   struct CoverSector
   {
     plAiNavMesh::SectorID m_SectorID = plInvalidIndex;
-    plUInt16 m_uiBakeGeneration = 0; ///< bumped on every invalidation; stale handles/bakes detect this
+    plUInt16 m_uiBakeGeneration = 0; ///< bumped when the points are replaced; stale handles detect this
+    plUInt16 m_uiChangeCounter = 0;  ///< bumped on every invalidation; a bake dispatched before the latest change is discarded
     bool m_bInUse = false;
     bool m_bBakePending = false; ///< queued or in flight
     plDynamicArray<plAiCoverPoint> m_Points;
@@ -222,6 +227,13 @@ private:
   plDeque<CoverSector> m_CoverSectors;
   plDynamicArray<plUInt32> m_FreeCoverSectors;
   plHashTable<plUInt32, plUInt32> m_SectorLookup; ///< sector id -> registry index
+
+  /// Releases the sector's claims and drops its points.
+  void ClearCoverPoints(CoverSector& ref_entry);
+
+  /// Before a rebake's points replace the sector's: moves each claim to the nearest new point within reach, releases the
+  /// rest, and makes handles to the old points stale.
+  void CarryCoverClaims(CoverSector& ref_entry, plUInt32 uiEntryIndex, plDynamicArray<plAiCoverPoint>& ref_newPoints);
 
   /// Sector id marking registry entries that hold authored (component-owned) cover. Such entries
   /// never enter m_SectorLookup, never re-bake and skip the sector-bounds culling in queries.
@@ -283,6 +295,9 @@ private:
   plHashTable<plGameObjectHandle, plUInt32> m_SoClaimByOwner;
 
   void ReleaseSoClaimAtIndex(plUInt32 uiClaimIndex);
+
+  /// Tells the smart object that its user stopped (plMsgAiSmartObjectUse with m_bStart = false), if it still exists.
+  void SendUseEnded(const SoClaim& claim);
   void SweepSmartObjectClaims();
   void DrawSmartObjectDebug();
 

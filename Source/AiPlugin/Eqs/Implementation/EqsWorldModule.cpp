@@ -1,5 +1,6 @@
 #include <AiPlugin/AiPluginPCH.h>
 
+#include <AiPlugin/Eqs/EqsCapture.h>
 #include <AiPlugin/Eqs/EqsWorldModule.h>
 #include <AiPlugin/Navigation/NavMeshWorldModule.h>
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
@@ -13,6 +14,7 @@
 plCVarInt cvar_EqsMaxQueriesPerFrame("AI.EQS.MaxQueriesPerFrame", 8, plCVarFlags::Default, "How many EQS queries may execute per frame; excess stays queued.");
 plCVarInt cvar_EqsMaxRaycastsPerQuery("AI.EQS.MaxRaycastsPerQuery", 24, plCVarFlags::Default, "Line-of-sight raycast budget per EQS query per frame; queries suspend and resume when it runs out.");
 plCVarInt cvar_EqsMaxPathQueriesPerFrame("AI.EQS.MaxPathQueriesPerFrame", 32, plCVarFlags::Default, "Shared per-frame budget for navmesh path/reachability tests across all EQS queries.");
+plCVarFloat cvar_EqsMaxQueryAge("AI.EQS.MaxQueryAge", 3.0f, plCVarFlags::Default, "Seconds a query may stay pending before it completes as TimedOut.");
 plCVarInt cvar_EqsVisualizeQueries("AI.EQS.VisualizeQueries", 0, plCVarFlags::Default, "Visualize EQS query results: 0 = off, 1 = on (score-colored candidates, winner highlighted, filtered items as crosses).");
 plCVarBool cvar_EqsVisualizeScores("AI.EQS.VisualizeScores", false, plCVarFlags::Default, "Draw the per-test score breakdown next to the winning EQS candidate.");
 plCVarBool cvar_EqsShowStats("AI.EQS.Stats", false, plCVarFlags::Default, "Show EQS statistics on screen.");
@@ -120,6 +122,7 @@ plAiEqsWorldModule::QueryID plAiEqsWorldModule::SubmitQuery(const plAiEqsQueryRe
   QuerySlot& slot = m_Queries[uiSlot];
   slot.m_hResource = hQuery;
   slot.m_pResource = pResource;
+  slot.m_uiResourceChangeCounter = pResource->GetCurrentResourceChangeCounter();
   slot.m_pDesc = &desc;
   slot.m_Params = params;
   slot.m_pNavMesh = pNavMesh;
@@ -231,6 +234,8 @@ plAiEqsWorldModule::QueryID plAiEqsWorldModule::SubmitQuery(const plAiEqsQueryRe
     }
   }
 
+  slot.m_vGeneratorCenter = vCenter;
+
   if (desc.m_pGenerator->NeedsMainThreadCollect())
   {
     if (const plAiTacticalWorldModule* pTactical = GetWorld()->GetModule<plAiTacticalWorldModule>())
@@ -330,15 +335,79 @@ void plAiEqsWorldModule::ReleaseQuery(QueryID id)
   const plUInt32 uiSlot = QuerySlotIndex(id);
   QuerySlot& slot = m_Queries[uiSlot];
 
-  // pending slots stay alive until executed (the execute list may already reference them);
-  // they are reclaimed by the sweep afterwards
+  // cancel: queries only execute inside UpdateExecute, so a pending slot is never in flight here
   if (slot.m_Result.m_Status == plAiEqsQueryResult::Status::Pending)
   {
-    slot.m_CompletedAt = plTime::MakeZero(); // reclaim as soon as it completed
-    return;
+    m_PendingQueue.RemoveAndCopy(uiSlot);
   }
 
   FreeSlot(uiSlot);
+}
+
+void plAiEqsWorldModule::CompleteQuery(QuerySlot& slot, plAiEqsQueryResult::Status status)
+{
+  slot.m_Result.m_Status = status;
+  slot.m_Result.m_TopN.Clear();
+  slot.m_CompletedAt = GetWorld()->GetClock().GetAccumulatedTime();
+  slot.m_Phase = QuerySlot::Phase::Done;
+}
+
+void plAiEqsWorldModule::RestartQuery(QuerySlot& slot)
+{
+  slot.m_uiResourceChangeCounter = slot.m_pResource->GetCurrentResourceChangeCounter();
+  slot.m_Items.Clear();
+  slot.m_DiscardedDebug.Clear();
+  slot.m_PreCollected.Clear();
+  slot.m_StageSummary = "0 generated (restarted after reload)";
+  slot.m_Phase = QuerySlot::Phase::Generate;
+  slot.m_uiTestCursor = 0;
+  slot.m_uiItemCursor = 0;
+
+  const plAiEqsGenerator* pGenerator = slot.m_pDesc->m_pGenerator.Borrow();
+
+  if (pGenerator == nullptr)
+  {
+    CompleteQuery(slot, plAiEqsQueryResult::Status::NoResult);
+    return;
+  }
+
+  if (pGenerator->NeedsMainThreadCollect())
+  {
+    if (const plAiTacticalWorldModule* pTactical = GetWorld()->GetModule<plAiTacticalWorldModule>())
+    {
+      pGenerator->CollectOnMainThread(slot.m_vGeneratorCenter, slot.m_Params.m_hQuerier, *pTactical, slot.m_PreCollected);
+    }
+  }
+}
+
+void plAiEqsWorldModule::PreparePendingQueries()
+{
+  const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
+  const plTime maxAge = plTime::MakeFromSeconds(plMath::Max(0.1f, cvar_EqsMaxQueryAge.GetValue()));
+
+  for (plUInt32 i = 0; i < m_PendingQueue.GetCount();)
+  {
+    QuerySlot& slot = m_Queries[m_PendingQueue[i]];
+
+    if (now - slot.m_SubmittedAt > maxAge)
+    {
+      slot.m_StageSummary.Append(" -> timed out");
+      CompleteQuery(slot, plAiEqsQueryResult::Status::TimedOut);
+      ++m_uiStatQueriesTimedOut;
+    }
+    else if (slot.m_pResource->GetCurrentResourceChangeCounter() != slot.m_uiResourceChangeCounter)
+    {
+      RestartQuery(slot);
+    }
+
+    if (slot.m_Result.m_Status != plAiEqsQueryResult::Status::Pending)
+    {
+      m_PendingQueue.RemoveAtAndCopy(i);
+      continue;
+    }
+
+    ++i;
+  }
 }
 
 void plAiEqsWorldModule::SweepQuerySlots()
@@ -366,6 +435,7 @@ void plAiEqsWorldModule::UpdateExecute(const UpdateContext& ctxt)
   m_uiStatRaycastsThisFrame = 0;
 
   SweepQuerySlots();
+  PreparePendingQueries();
 
   if (!m_PendingQueue.IsEmpty())
   {
@@ -413,21 +483,25 @@ void plAiEqsWorldModule::UpdateExecute(const UpdateContext& ctxt)
 
     m_uiStatQueriesExecuted = m_ExecuteList.GetCount();
 
-    // suspended queries resume FIRST next frame (their budget ran out, not their usefulness);
-    // completed ones feed the visualization
-    plUInt32 uiRequeued = 0;
-
+    // suspended queries queue behind everything already waiting, so queries that can't finish within
+    // one frame's budget never starve the rest; completed ones feed the visualization
     for (plUInt32 uiSlotIndex : m_ExecuteList)
     {
       QuerySlot& slot = m_Queries[uiSlotIndex];
 
       if (slot.m_Result.m_Status == plAiEqsQueryResult::Status::Pending)
       {
-        m_PendingQueue.InsertAt(uiRequeued, uiSlotIndex);
-        ++uiRequeued;
+        m_PendingQueue.PushBack(uiSlotIndex);
         ++m_uiStatQueriesSuspended;
+        continue;
       }
-      else if (cvar_EqsVisualizeQueries > 0 && slot.m_Result.m_Status != plAiEqsQueryResult::Status::AreaNotReady)
+
+      if (m_bCaptureArmed && (m_hCaptureQuerier.IsInvalidated() || m_hCaptureQuerier == slot.m_Params.m_hQuerier))
+      {
+        RecordCapture(slot);
+      }
+
+      if (cvar_EqsVisualizeQueries > 0 && slot.m_Result.m_Status != plAiEqsQueryResult::Status::AreaNotReady)
       {
         RetainDebugQuery(slot);
       }
@@ -447,6 +521,75 @@ void plAiEqsWorldModule::UpdateExecute(const UpdateContext& ctxt)
   {
     DrawStats();
   }
+}
+
+void plAiEqsWorldModule::CaptureNextQuery(const plGameObjectHandle& hQuerier)
+{
+  m_bCaptureArmed = true;
+  m_hCaptureQuerier = hQuerier;
+}
+
+void plAiEqsWorldModule::RecordCapture(const QuerySlot& slot)
+{
+  m_bCaptureArmed = false;
+
+  if (m_pLastCapture == nullptr)
+  {
+    m_pLastCapture = PL_DEFAULT_NEW(plAiEqsCapture);
+  }
+
+  plAiEqsCapture& capture = *m_pLastCapture;
+  capture = plAiEqsCapture();
+  capture.m_sQueryName = (slot.m_pDesc != nullptr) ? slot.m_pDesc->m_sName.GetData() : "";
+  capture.m_sResourceID = slot.m_hResource.IsValid() ? slot.m_hResource.GetResourceID().GetView() : plStringView();
+  capture.m_uiResourceChangeCounter = slot.m_uiResourceChangeCounter;
+  capture.m_Time = GetWorld()->GetClock().GetAccumulatedTime();
+  capture.m_uiSeed = slot.m_uiSelectSeed;
+  capture.m_vQuerier = slot.m_vQuerier;
+  capture.m_hQuerier = slot.m_Params.m_hQuerier;
+  capture.m_Status = slot.m_Result.m_Status;
+
+  for (const plAiEqsResolvedSlot& resolved : slot.m_ResolvedSlots)
+  {
+    plAiEqsCapture::Context& context = capture.m_Contexts.ExpandAndGetRef();
+    context.m_sName = resolved.m_sName;
+    context.m_Positions = resolved.m_Positions;
+  }
+
+  const plUInt32 uiTests = (slot.m_pDesc != nullptr) ? plMath::Min<plUInt32>(slot.m_pDesc->m_Tests.GetCount(), plAiEqsItem::MaxRecordedTests) : 0;
+
+  auto AddCandidate = [&](const plAiEqsItem& item) {
+    plAiEqsCapture::Candidate& candidate = capture.m_Candidates.ExpandAndGetRef();
+    candidate.m_vPosition = item.m_vPosition;
+    candidate.m_Payload = item.m_Payload;
+    candidate.m_fFinal = item.m_fFinal;
+    candidate.m_bDiscarded = item.m_bDiscarded;
+    candidate.m_uiRejectedBy = item.m_uiRejectedBy;
+
+    for (plUInt32 t = 0; t < uiTests; ++t)
+    {
+      const plAiEqsTestTrace& trace = item.m_TestTrace[t];
+      plAiEqsCapture::Sample& sample = candidate.m_Samples.ExpandAndGetRef();
+      sample.m_bMeasured = trace.m_bEvaluated;
+      sample.m_fRaw = trace.m_fRaw;
+      sample.m_fMeasurement = trace.m_fMeasurement;
+      sample.m_bHasMeasurement = trace.m_bHasMeasurement;
+      sample.m_Data = trace.m_Data;
+    }
+  };
+
+  // survivors are sorted best first, with the selected one in front
+  for (const plAiEqsItem& item : slot.m_Items)
+  {
+    AddCandidate(item);
+  }
+
+  for (const plAiEqsItem& item : slot.m_DiscardedDebug)
+  {
+    AddCandidate(item);
+  }
+
+  capture.m_iSelected = (slot.m_Result.m_Status == plAiEqsQueryResult::Status::Ready && !slot.m_Items.IsEmpty()) ? 0 : -1;
 }
 
 void plAiEqsWorldModule::RetainDebugQuery(const QuerySlot& slot)
@@ -580,11 +723,22 @@ void plAiEqsWorldModule::DrawStats()
   }
 
   plStringBuilder sStats;
-  sStats.AppendFormat("EQS: {} executed, {} suspended, {} queued\n", m_uiStatQueriesExecuted, m_uiStatQueriesSuspended, m_PendingQueue.GetCount());
+  sStats.AppendFormat("EQS: {} executed, {} suspended, {} queued, {} timed out\n", m_uiStatQueriesExecuted, m_uiStatQueriesSuspended, m_PendingQueue.GetCount(), m_uiStatQueriesTimedOut);
   sStats.AppendFormat("Slots: {} active / {} total\n", uiActiveSlots, m_Queries.GetCount());
   sStats.AppendFormat("Rays: {} this frame, path budget left {}\n", static_cast<plInt32>(m_uiStatRaycastsThisFrame), plMath::Max<plInt32>(0, m_iPathQueryBudget));
 
   plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::TopLeft, "AiEqsStats", sStats);
+}
+
+plAiEqsFrameStats plAiEqsWorldModule::GetFrameStats() const
+{
+  plAiEqsFrameStats stats;
+  stats.m_uiExecuted = m_uiStatQueriesExecuted;
+  stats.m_uiSuspended = m_uiStatQueriesSuspended;
+  stats.m_uiQueued = m_PendingQueue.GetCount();
+  stats.m_uiTimedOut = m_uiStatQueriesTimedOut;
+  stats.m_uiRaycasts = static_cast<plUInt32>(static_cast<plInt32>(m_uiStatRaycastsThisFrame));
+  return stats;
 }
 
 PL_STATICLINK_FILE(AiPlugin, AiPlugin_Eqs_Implementation_EqsWorldModule);

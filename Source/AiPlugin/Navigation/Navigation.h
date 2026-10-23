@@ -141,5 +141,12 @@ private:
   /// and the entire corridor must be re-validated (cached poly refs may be stale)
   plUInt32 m_uiLastNavMeshGeneration = 0;
 
+  /// plAiNavMesh::GetNavMeshGeneration() when the last path search started: a search that fails while tiles change may
+  /// have failed because of the change, so it runs again instead of reporting NoPathFound
+  plUInt32 m_uiSearchNavMeshGeneration = 0;
+
   bool UpdatePathSearch();
+
+  /// NoPathFound, unless the navmesh changed since the search started; then the search starts over.
+  void SetNoPathFound();
 };

@@ -2,8 +2,7 @@
 
 #include <EditorPluginAi/Assets/AiArchetypeAsset.h>
 #include <EditorPluginAi/Assets/AiArchetypeAssetManager.h>
-#include <EditorPluginAi/Assets/AiArchetypeAssetWindow.moc.h>
-#include <GuiFoundation/UIServices/ImageCache.moc.h>
+#include <EditorPluginAi/Assets/AiArchetypeAssetWindow.h>
 
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiArchetypeAssetDocumentManager, 1, plRTTIDefaultAllocator<plAiArchetypeAssetDocumentManager>)
 PL_END_DYNAMIC_REFLECTED_TYPE;
@@ -22,8 +21,6 @@ plAiArchetypeAssetDocumentManager::plAiArchetypeAssetDocumentManager()
 
   m_DocTypeDesc.m_sResourceFileExtension = "plAiArchetype";
   m_DocTypeDesc.m_AssetDocumentFlags = plAssetDocumentFlags::AutoTransformOnSave;
-
-  plQtImageCache::GetSingleton()->RegisterTypeImage("AiArchetype", QPixmap(":/AssetIcons/AiArchetype.svg"));
 }
 
 plAiArchetypeAssetDocumentManager::~plAiArchetypeAssetDocumentManager()
@@ -39,7 +36,7 @@ void plAiArchetypeAssetDocumentManager::OnDocumentManagerEvent(const plDocumentM
     {
       if (e.m_pDocument->GetDynamicRTTI() == plGetStaticRTTI<plAiArchetypeAssetDocument>())
       {
-        new plQtAiArchetypeAssetDocumentWindow(e.m_pDocument); // NOLINT: not a memory leak
+        new plAiArchetypeAssetDocumentWindow(e.m_pDocument); // NOLINT: not a memory leak
       }
     }
     break;

@@ -31,6 +31,26 @@ namespace
   static const plTempHashedString s_sAiLockBehavior("Ai_LockBehavior");
 } // namespace
 
+namespace
+{
+  thread_local plInt32 s_iWorldShutdownDepth = 0;
+} // namespace
+
+bool plAiBehaviorLogic::IsWorldShuttingDown()
+{
+  return s_iWorldShutdownDepth > 0;
+}
+
+plAiBehaviorLogic::WorldShutdownScope::WorldShutdownScope()
+{
+  ++s_iWorldShutdownDepth;
+}
+
+plAiBehaviorLogic::WorldShutdownScope::~WorldShutdownScope()
+{
+  --s_iWorldShutdownDepth;
+}
+
 plAiBehaviorLogic_StateMachine::plAiBehaviorLogic_StateMachine() = default;
 plAiBehaviorLogic_StateMachine::~plAiBehaviorLogic_StateMachine() = default;
 

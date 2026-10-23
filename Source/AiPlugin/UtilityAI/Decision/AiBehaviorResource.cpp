@@ -64,10 +64,17 @@ void plAiConsiderationDesc::PrepareCurve()
   m_ResponseCurve.CreateLinearApproximation();
 }
 
-float plAiConsiderationDesc::Evaluate(const plAiScoringContext& context) const
+float plAiConsiderationDesc::Evaluate(const plAiScoringContext& context, plAiConsiderationTrace* out_pTrace /*= nullptr*/) const
 {
   if (m_pInput == nullptr)
+  {
+    if (out_pTrace != nullptr)
+    {
+      *out_pTrace = plAiConsiderationTrace();
+    }
+
     return 1.0f; // an unconfigured consideration doesn't influence the score
+  }
 
   const float fRaw = m_pInput->Evaluate(context);
 
@@ -75,10 +82,17 @@ float plAiConsiderationDesc::Evaluate(const plAiScoringContext& context) const
   float fNormalized = (plMath::Abs(fRange) < plMath::SmallEpsilon<float>()) ? 0.0f : (fRaw - m_fInputMin) / fRange;
   fNormalized = plMath::Clamp(fNormalized, 0.0f, 1.0f);
 
-  if (m_ResponseCurve.IsEmpty())
-    return fNormalized;
+  const float fValue = m_ResponseCurve.IsEmpty() ? fNormalized : plAiEvaluateResponseCurve(m_ResponseCurve, fNormalized, m_bLegacyCurveDomain);
 
-  return plAiEvaluateResponseCurve(m_ResponseCurve, fNormalized, m_bLegacyCurveDomain);
+  if (out_pTrace != nullptr)
+  {
+    out_pTrace->m_pInputType = m_pInput->GetDynamicRTTI();
+    out_pTrace->m_fRaw = fRaw;
+    out_pTrace->m_fNormalized = fNormalized;
+    out_pTrace->m_fValue = fValue;
+  }
+
+  return fValue;
 }
 
 //////////////////////////////////////////////////////////////////////////

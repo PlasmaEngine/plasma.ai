@@ -92,8 +92,20 @@ public:
   /// obstacle-only agent) - callers then use their own unmodified steering.
   bool TryGetAdjustedVelocity(AgentID id, plVec3& out_vVelocity) const;
 
+  /// \name Proximity grid statistics of the last solve (for budget displays)
+  ///@{
+  plUInt32 GetProximityGridCapacity() const { return m_uiGridPoolSize; }         ///< cell entries the grid holds
+  plUInt32 GetProximityGridCellsUsed() const { return m_uiGridCellsUsed; }       ///< cell entries the agents covered
+  plUInt32 GetProximityGridCellsDropped() const { return m_uiGridCellsDropped; } ///< beyond the largest possible grid; those agents miss neighbors
+  plUInt32 GetSolvedAgentCount() const { return m_SolveList.GetCount(); }       ///< agents the last solve covered
+  ///@}
+
 private:
+  static constexpr float s_fProximityCellSize = 2.0f;
+
   void UpdateSolve(const UpdateContext& context);
+  void ResizeProximityGrid(plUInt32 uiPoolSize);
+  static plUInt32 CountProximityCells(const plAiCrowdAgentState& state);
   void SolveAgent(plUInt32 uiSolveIndex, plUInt32 uiScratchIndex);
   void DrawDebugVisualization();
 
@@ -137,6 +149,10 @@ private:
 
   plDynamicArray<AgentID> m_SolveList; // agents submitted this frame, rebuilt per solve
   dtProximityGrid* m_pGrid = nullptr;  // dtAlloc'd
+  plUInt32 m_uiGridPoolSize = 0;
+  plUInt32 m_uiGridCellsUsed = 0;
+  plUInt32 m_uiGridCellsDropped = 0;
+  bool m_bWarnedGridOverflow = false;
   plDeque<Scratch> m_Scratch;          // one per parallel invocation, acquired via atomic counter
   plAtomicInteger32 m_uiScratchCounter = 0;
 

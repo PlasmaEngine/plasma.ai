@@ -57,7 +57,7 @@ void plAiEditorAction::Execute(const plVariant& value)
 {
   if (m_Type == ActionType::ProjectSettings)
   {
-    if (plQtAiProjectSettingsEngineDlg::Open(nullptr))
+    if (plAiProjectSettingsEngineDlg::Open())
     {
       plToolsProject::BroadcastConfigChanged();
     }

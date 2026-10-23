@@ -10,6 +10,7 @@ extern PL_AIPLUGIN_DLL plCVarBool cvar_AiAgentsShowScores;      ///< Render per-
 extern PL_AIPLUGIN_DLL plCVarBool cvar_AiAgentsShowHistory;     ///< Render the per-agent behavior switch history.
 extern PL_AIPLUGIN_DLL plCVarBool cvar_AiAgentsShowPerception;  ///< Render perceived target records.
 extern PL_AIPLUGIN_DLL plCVarString cvar_AiAgentsDebugFilter;   ///< Only agents whose object name contains this string show debug info.
+extern PL_AIPLUGIN_DLL plCVarBool cvar_AiAgentsDebugWatchedOnly; ///< Only agents a debugging tool watches show debug info.
 extern PL_AIPLUGIN_DLL plCVarInt cvar_AiAgentsMaxDecisionsPerFrame; ///< Upper bound of full decision (scoring) passes per frame.
 extern PL_AIPLUGIN_DLL plCVarFloat cvar_AiAgentsDecisionHz;     ///< How often each agent re-evaluates its behavior choice (Hot LOD tier).
 extern PL_AIPLUGIN_DLL plCVarBool cvar_AiAgentsAsyncScoring;    ///< Score utility behaviors in parallel in the async world update phase.

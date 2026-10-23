@@ -27,6 +27,18 @@ PL_BEGIN_COMPONENT_TYPE(plAiAgentComponent, 2, plComponentMode::Static)
   }
   PL_END_MESSAGEHANDLERS;
 
+  PL_BEGIN_FUNCTIONS
+  {
+    PL_SCRIPT_FUNCTION_PROPERTY(RequestDecision),
+    PL_SCRIPT_FUNCTION_PROPERTY(SetBehaviorEnabled, In, "Behavior", In, "Enabled"),
+    PL_SCRIPT_FUNCTION_PROPERTY(SetBehaviorWeight, In, "Behavior", In, "Scale", In, "DurationSeconds"),
+    PL_SCRIPT_FUNCTION_PROPERTY(IssueCommand, In, "Command", In, "Position", In, "Target", In, "ExpirySeconds"),
+    PL_SCRIPT_FUNCTION_PROPERTY(CancelCommand),
+    PL_SCRIPT_FUNCTION_PROPERTY(GetActiveBehavior)->AddFlags(plPropertyFlags::Const),
+    PL_SCRIPT_FUNCTION_PROPERTY(GetActiveTarget)->AddFlags(plPropertyFlags::Const),
+  }
+  PL_END_FUNCTIONS;
+
   PL_BEGIN_ATTRIBUTES
   {
     new plCategoryAttribute("AI/Components"),
@@ -81,6 +93,74 @@ plHashedString plAiAgentComponent::GetResolvedTeam() const
   }
 
   return plHashedString();
+}
+
+plAiBrainWorldModule* plAiAgentComponent::GetBrain() const
+{
+  if (m_uiAgentIndex == plInvalidIndex)
+    return nullptr;
+
+  return const_cast<plWorld*>(GetWorld())->GetModule<plAiBrainWorldModule>();
+}
+
+void plAiAgentComponent::RequestDecision()
+{
+  if (plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    pBrain->RequestDecision(m_uiAgentIndex, plAiWakeReason::Script);
+  }
+}
+
+void plAiAgentComponent::SetBehaviorEnabled(const char* szBehavior, bool bEnabled)
+{
+  if (plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    pBrain->SetBehaviorEnabled(m_uiAgentIndex, szBehavior, bEnabled);
+  }
+}
+
+void plAiAgentComponent::SetBehaviorWeight(const char* szBehavior, float fScale, float fDurationSeconds)
+{
+  if (plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    pBrain->SetBehaviorWeight(m_uiAgentIndex, szBehavior, fScale, plTime::MakeFromSeconds(fDurationSeconds));
+  }
+}
+
+void plAiAgentComponent::IssueCommand(const char* szCommand, const plVec3& vPosition, plGameObjectHandle hTarget, float fExpirySeconds)
+{
+  if (plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    pBrain->IssueCommand(m_uiAgentIndex, szCommand, vPosition, hTarget, plTime::MakeFromSeconds(fExpirySeconds));
+  }
+}
+
+void plAiAgentComponent::CancelCommand()
+{
+  if (plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    pBrain->CancelCommand(m_uiAgentIndex);
+  }
+}
+
+const char* plAiAgentComponent::GetActiveBehavior() const
+{
+  if (const plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    return pBrain->GetActiveBehaviorName(m_uiAgentIndex).GetData();
+  }
+
+  return "";
+}
+
+plGameObjectHandle plAiAgentComponent::GetActiveTarget() const
+{
+  if (const plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    return pBrain->GetActiveTarget(m_uiAgentIndex);
+  }
+
+  return plGameObjectHandle();
 }
 
 void plAiAgentComponent::OnMsgAiStimulus(plMsgAiStimulus& ref_msg)

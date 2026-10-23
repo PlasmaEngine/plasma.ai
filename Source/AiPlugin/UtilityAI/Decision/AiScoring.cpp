@@ -8,6 +8,10 @@ PL_BEGIN_STATIC_REFLECTED_ENUM(plAiBehaviorCategory, 1)
   PL_ENUM_CONSTANTS(plAiBehaviorCategory::Fallback, plAiBehaviorCategory::Idle, plAiBehaviorCategory::ActiveIdle, plAiBehaviorCategory::Investigate)
   PL_ENUM_CONSTANTS(plAiBehaviorCategory::Command, plAiBehaviorCategory::Combat, plAiBehaviorCategory::Interrupt)
 PL_END_STATIC_REFLECTED_ENUM;
+
+PL_BEGIN_STATIC_REFLECTED_ENUM(plAiAlertLevel, 1)
+  PL_ENUM_CONSTANTS(plAiAlertLevel::Unaware, plAiAlertLevel::Suspicious, plAiAlertLevel::Searching, plAiAlertLevel::Alert)
+PL_END_STATIC_REFLECTED_ENUM;
 // clang-format on
 
 plVariant plAiScoringContext::GetBlackboardValue(const plHashedString& sEntryName) const

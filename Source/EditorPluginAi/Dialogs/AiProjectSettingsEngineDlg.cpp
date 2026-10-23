@@ -1,18 +1,12 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Assets/AiEngineView.h>
-#include <EditorPluginAi/Dialogs/AiProjectSettingsDlg.moc.h>
 #include <EditorPluginAi/Dialogs/AiProjectSettingsEngineDlg.h>
 #include <EditorUi/Menu.h>
 #include <EditorUi/Surface.h>
 #include <Foundation/Utilities/ConversionUtils.h>
 #include <GuiFoundation/EngineUi/EnginePrompt.h>
 #include <GuiFoundation/UIServices/DynamicEnums.h>
-#include <GuiFoundation/UIServices/UIServices.moc.h>
-
-#include <QIcon>
-#include <QMessageBox>
-#include <QTimer>
 
 void UpdateGroundTypeDynamicEnumValues();
 
@@ -51,7 +45,6 @@ namespace
 
   const char* s_szCheckBoxOn = ":/AiPlugin/CheckBoxOn.svg";
   const char* s_szCheckBoxOff = ":/AiPlugin/CheckBoxOff.svg";
-  const char* s_szAiIcon = ":/AiPlugin/plAiPlugin.svg";
   const char* s_szAiKindIcon = ":/AiPlugin/AiKind.svg";
   const char* s_szFirstNavmesh = "<first navmesh>";
 
@@ -185,10 +178,10 @@ namespace
 //////////////////////////////////////////////////////////////////////////
 // Ground types: the 32 slots, a check box per custom slot, F2 or a double-click renames
 
-class plQtAiProjectSettingsEngineDlg::GroundTypeAdapter : public plEditorUiTreeAdapter
+class plAiProjectSettingsEngineDlg::GroundTypeAdapter : public plEditorUiTreeAdapter
 {
 public:
-  GroundTypeAdapter(plQtAiProjectSettingsEngineDlg& ref_dialog)
+  GroundTypeAdapter(plAiProjectSettingsEngineDlg& ref_dialog)
     : m_Dialog(ref_dialog)
   {
   }
@@ -252,18 +245,17 @@ public:
   }
 
 private:
-  plQtAiProjectSettingsEngineDlg& m_Dialog;
+  plAiProjectSettingsEngineDlg& m_Dialog;
 };
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiProjectSettingsEngineDlg
+// plAiProjectSettingsEngineDlg
 
-plQtAiProjectSettingsEngineDlg::plQtAiProjectSettingsEngineDlg(QWidget* pParent)
-  : plQtEngineDialog(pParent, "AiProjectSettings", "Ai Project Settings")
+plAiProjectSettingsEngineDlg::plAiProjectSettingsEngineDlg()
+  : plEngineDialog("AiProjectSettings", "Ai Project Settings")
 {
-  setWindowIcon(QIcon(s_szAiIcon));
-
-  plQtAiProjectSettingsDlg::EnsureConfigFileExists();
+  SetIcon(":/AiPlugin/plAiPlugin.svg");
+  EnsureConfigFileExists();
 
   for (auto it : plDynamicEnum::GetDynamicEnum("PhysicsCollisionLayer").GetAllValidValues())
     m_CollisionLayers.Insert(it.Key(), it.Value());
@@ -290,11 +282,11 @@ plQtAiProjectSettingsEngineDlg::plQtAiProjectSettingsEngineDlg(QWidget* pParent)
   plEditorUiSurface& surface = *GetSurface();
 
   // subscribed before the tree exists, so Space toggles a check box before the tree sees the key
-  m_KeySubscription = surface.m_KeyEvents.AddEventHandler(plMakeDelegate(&plQtAiProjectSettingsEngineDlg::OnKey, this));
-  m_PointerSubscription = surface.m_PointerEvents.AddEventHandler(plMakeDelegate(&plQtAiProjectSettingsEngineDlg::OnPointer, this));
+  m_KeySubscription = surface.m_KeyEvents.AddEventHandler(plMakeDelegate(&plAiProjectSettingsEngineDlg::OnKey, this));
+  m_PointerSubscription = surface.m_PointerEvents.AddEventHandler(plMakeDelegate(&plAiProjectSettingsEngineDlg::OnPointer, this));
 
   m_pTabs = PL_DEFAULT_NEW(plEditorUiTabs, surface, "Ai.Tabs");
-  m_TabSubscription = m_pTabs->m_CurrentChanged.AddEventHandler(plMakeDelegate(&plQtAiProjectSettingsEngineDlg::OnTabChanged, this));
+  m_TabSubscription = m_pTabs->m_CurrentChanged.AddEventHandler(plMakeDelegate(&plAiProjectSettingsEngineDlg::OnTabChanged, this));
 
   m_pGroundTypeAdapter = PL_DEFAULT_NEW(GroundTypeAdapter, *this);
   m_pGroundTypes = PL_DEFAULT_NEW(plEditorUiTree, surface, "Ai.GroundTypes", *m_pGroundTypeAdapter);
@@ -303,7 +295,7 @@ plQtAiProjectSettingsEngineDlg::plQtAiProjectSettingsEngineDlg(QWidget* pParent)
   ShowTab(Tab::GroundTypes);
 }
 
-plQtAiProjectSettingsEngineDlg::~plQtAiProjectSettingsEngineDlg()
+plAiProjectSettingsEngineDlg::~plAiProjectSettingsEngineDlg()
 {
   if (!IsReady())
     return;
@@ -313,26 +305,33 @@ plQtAiProjectSettingsEngineDlg::~plQtAiProjectSettingsEngineDlg()
   GetSurface()->m_KeyEvents.RemoveEventHandler(m_KeySubscription);
 }
 
-bool plQtAiProjectSettingsEngineDlg::Open(QWidget* pParent)
+bool plAiProjectSettingsEngineDlg::Open()
 {
-  if (plQtEngineDialog::IsEngineEnabled())
-  {
-    plQtAiProjectSettingsEngineDlg dlg(pParent);
-    return dlg.exec() == QDialog::Accepted;
-  }
+  if (!plEngineDialog::IsEngineEnabled())
+    return false;
 
-  plQtAiProjectSettingsDlg dlg(pParent);
-  return dlg.exec() == QDialog::Accepted;
+  plAiProjectSettingsEngineDlg dlg;
+  return dlg.Exec() == plEngineDialog::Accepted;
 }
 
-plVec2 plQtAiProjectSettingsEngineDlg::GetPreferredSize() const
+void plAiProjectSettingsEngineDlg::EnsureConfigFileExists()
+{
+  plAiNavigationConfig cfg;
+
+  if (cfg.Load().Failed())
+  {
+    cfg.Save().IgnoreResult();
+  }
+}
+
+plVec2 plAiProjectSettingsEngineDlg::GetPreferredSize() const
 {
   return plVec2(s_fSettingsWidth, s_fTabStripHeight + 1.0f + s_fPageHeight + plEditorUiDialogHost::FooterHeight);
 }
 
 // Data
 
-void plQtAiProjectSettingsEngineDlg::LoadConfig()
+void plAiProjectSettingsEngineDlg::LoadConfig()
 {
   // a fresh config, so nothing of the edited one survives a Reset
   m_Config = plAiNavigationConfig();
@@ -347,13 +346,13 @@ void plQtAiProjectSettingsEngineDlg::LoadConfig()
   m_iPathSearch = m_Config.m_PathSearchConfigs.IsEmpty() ? -1 : 0;
 }
 
-void plQtAiProjectSettingsEngineDlg::SaveConfig()
+void plAiProjectSettingsEngineDlg::SaveConfig()
 {
   m_Config.Save().IgnoreResult();
   UpdateGroundTypeDynamicEnumValues();
 }
 
-void plQtAiProjectSettingsEngineDlg::SelectNavmesh(plInt32 iIndex)
+void plAiProjectSettingsEngineDlg::SelectNavmesh(plInt32 iIndex)
 {
   m_iNavmesh = iIndex;
 
@@ -366,7 +365,7 @@ void plQtAiProjectSettingsEngineDlg::SelectNavmesh(plInt32 iIndex)
   Rebuild();
 }
 
-void plQtAiProjectSettingsEngineDlg::SelectPathSearch(plInt32 iIndex)
+void plAiProjectSettingsEngineDlg::SelectPathSearch(plInt32 iIndex)
 {
   m_iPathSearch = iIndex;
 
@@ -379,7 +378,7 @@ void plQtAiProjectSettingsEngineDlg::SelectPathSearch(plInt32 iIndex)
   Rebuild();
 }
 
-plUInt32 plQtAiProjectSettingsEngineDlg::CountUsedGroundTypes() const
+plUInt32 plAiProjectSettingsEngineDlg::CountUsedGroundTypes() const
 {
   plUInt32 uiCount = 0;
   for (plUInt32 i = 2; i < plAiNumGroundTypes; ++i)
@@ -391,7 +390,7 @@ plUInt32 plQtAiProjectSettingsEngineDlg::CountUsedGroundTypes() const
   return uiCount;
 }
 
-void plQtAiProjectSettingsEngineDlg::ToggleGroundType(plUInt32 uiIndex)
+void plAiProjectSettingsEngineDlg::ToggleGroundType(plUInt32 uiIndex)
 {
   if (GroundTypeAdapter::IsFixed(uiIndex))
     return;
@@ -404,7 +403,7 @@ void plQtAiProjectSettingsEngineDlg::ToggleGroundType(plUInt32 uiIndex)
   Rebuild();
 }
 
-void plQtAiProjectSettingsEngineDlg::ToggleTraversalAllowed(plUInt32 uiGroundType)
+void plAiProjectSettingsEngineDlg::ToggleTraversalAllowed(plUInt32 uiGroundType)
 {
   if (m_iPathSearch < 0 || uiGroundType >= plAiNumGroundTypes)
     return;
@@ -417,7 +416,7 @@ void plQtAiProjectSettingsEngineDlg::ToggleTraversalAllowed(plUInt32 uiGroundTyp
 
 // Number fields
 
-void plQtAiProjectSettingsEngineDlg::AddField(plStringView sKey, const char* szLabel, NumberType type, void* pValue, double fMin, double fMax, const char* szUnit, float fWidth, const char* szToolTip)
+void plAiProjectSettingsEngineDlg::AddField(plStringView sKey, const char* szLabel, NumberType type, void* pValue, double fMin, double fMax, const char* szUnit, float fWidth, const char* szToolTip)
 {
   NumberSetting& field = m_Fields.ExpandAndGetRef();
   field.m_sKey = sKey;
@@ -431,13 +430,13 @@ void plQtAiProjectSettingsEngineDlg::AddField(plStringView sKey, const char* szL
   field.m_fWidth = fWidth;
 }
 
-void plQtAiProjectSettingsEngineDlg::ClearFields()
+void plAiProjectSettingsEngineDlg::ClearFields()
 {
   m_Fields.Clear();
   m_PathRows.Clear();
 }
 
-void plQtAiProjectSettingsEngineDlg::CollectFields()
+void plAiProjectSettingsEngineDlg::CollectFields()
 {
   ClearFields();
 
@@ -499,7 +498,7 @@ void plQtAiProjectSettingsEngineDlg::CollectFields()
   }
 }
 
-void plQtAiProjectSettingsEngineDlg::WriteFields()
+void plAiProjectSettingsEngineDlg::WriteFields()
 {
   plBlackboard& board = GetSurface()->GetBlackboard();
 
@@ -514,14 +513,14 @@ void plQtAiProjectSettingsEngineDlg::WriteFields()
   }
 }
 
-plString plQtAiProjectSettingsEngineDlg::GetFieldText(const NumberSetting& field) const
+plString plAiProjectSettingsEngineDlg::GetFieldText(const NumberSetting& field) const
 {
   const plStringBuilder sBinding("Ai.F.", field.m_sKey, ".Text");
   const plVariant value = GetSurface()->GetBlackboard().GetEntryValue(plTempHashedString(sBinding));
   return value.IsValid() ? value.ConvertTo<plString>() : field.m_sShownText;
 }
 
-void plQtAiProjectSettingsEngineDlg::ReadFields()
+void plAiProjectSettingsEngineDlg::ReadFields()
 {
   bool bValidityChanged = false;
 
@@ -553,7 +552,7 @@ void plQtAiProjectSettingsEngineDlg::ReadFields()
     Rebuild();
 }
 
-double plQtAiProjectSettingsEngineDlg::GetValue(const NumberSetting& field)
+double plAiProjectSettingsEngineDlg::GetValue(const NumberSetting& field)
 {
   switch (field.m_Type)
   {
@@ -570,7 +569,7 @@ double plQtAiProjectSettingsEngineDlg::GetValue(const NumberSetting& field)
   return 0.0;
 }
 
-void plQtAiProjectSettingsEngineDlg::SetValue(const NumberSetting& field, double fValue)
+void plAiProjectSettingsEngineDlg::SetValue(const NumberSetting& field, double fValue)
 {
   switch (field.m_Type)
   {
@@ -589,7 +588,7 @@ void plQtAiProjectSettingsEngineDlg::SetValue(const NumberSetting& field, double
   }
 }
 
-plString plQtAiProjectSettingsEngineDlg::FormatValue(const NumberSetting& field, double fValue)
+plString plAiProjectSettingsEngineDlg::FormatValue(const NumberSetting& field, double fValue)
 {
   if (field.m_Type == NumberType::UInt8 || field.m_Type == NumberType::UInt16)
     return FormatCount(static_cast<plUInt32>(fValue));
@@ -597,7 +596,7 @@ plString plQtAiProjectSettingsEngineDlg::FormatValue(const NumberSetting& field,
   return plAiEngineUi::FormatNumber(fValue, 2);
 }
 
-plString plQtAiProjectSettingsEngineDlg::GetRangeMessage(plStringView sLabel, double fMin, double fMax, bool bWhole)
+plString plAiProjectSettingsEngineDlg::GetRangeMessage(plStringView sLabel, double fMin, double fMax, bool bWhole)
 {
   plStringBuilder sMessage;
 
@@ -609,7 +608,7 @@ plString plQtAiProjectSettingsEngineDlg::GetRangeMessage(plStringView sLabel, do
   return sMessage;
 }
 
-void plQtAiProjectSettingsEngineDlg::UpdateValidation()
+void plAiProjectSettingsEngineDlg::UpdateValidation()
 {
   plString sMessage;
 
@@ -626,7 +625,7 @@ void plQtAiProjectSettingsEngineDlg::UpdateValidation()
   GetHost().SetButtonEnabled(s_szSettingsOk, sMessage.IsEmpty());
 }
 
-void plQtAiProjectSettingsEngineDlg::OnUiUpdate()
+void plAiProjectSettingsEngineDlg::OnUiUpdate()
 {
   ReadFields();
   UpdateValidation();
@@ -634,7 +633,7 @@ void plQtAiProjectSettingsEngineDlg::OnUiUpdate()
 
 // Document
 
-void plQtAiProjectSettingsEngineDlg::UpdateTabs()
+void plAiProjectSettingsEngineDlg::UpdateTabs()
 {
   plEditorUiTab tabs[5];
   tabs[0].m_sLabel = "Ground Types";
@@ -649,7 +648,7 @@ void plQtAiProjectSettingsEngineDlg::UpdateTabs()
   m_pTabs->SetTabs(tabs);
 }
 
-void plQtAiProjectSettingsEngineDlg::ShowTab(Tab tab)
+void plAiProjectSettingsEngineDlg::ShowTab(Tab tab)
 {
   m_Tab = tab;
   m_pTabs->SetCurrent(static_cast<plUInt32>(tab));
@@ -660,13 +659,13 @@ void plQtAiProjectSettingsEngineDlg::ShowTab(Tab tab)
   Rebuild();
 }
 
-void plQtAiProjectSettingsEngineDlg::OnTabChanged(plUInt32 uiTab)
+void plAiProjectSettingsEngineDlg::OnTabChanged(plUInt32 uiTab)
 {
   if (static_cast<Tab>(uiTab) != m_Tab)
     ShowTab(static_cast<Tab>(uiTab));
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildBody(plUiElement* pBody, const plVec2& vSize)
+void plAiProjectSettingsEngineDlg::BuildBody(plUiElement* pBody, const plVec2& vSize)
 {
   using namespace plEditorUi;
 
@@ -704,7 +703,7 @@ void plQtAiProjectSettingsEngineDlg::BuildBody(plUiElement* pBody, const plVec2&
   }
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildTabRow(plUiElement* pBody, float fWidth)
+void plAiProjectSettingsEngineDlg::BuildTabRow(plUiElement* pBody, float fWidth)
 {
   using namespace plEditorUi;
 
@@ -720,7 +719,7 @@ void plQtAiProjectSettingsEngineDlg::BuildTabRow(plUiElement* pBody, float fWidt
   pLine->m_Color = Line();
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildGroundTypes(plUiElement* pPage, const plVec2& vSize)
+void plAiProjectSettingsEngineDlg::BuildGroundTypes(plUiElement* pPage, const plVec2& vSize)
 {
   using namespace plEditorUi;
 
@@ -746,7 +745,7 @@ void plQtAiProjectSettingsEngineDlg::BuildGroundTypes(plUiElement* pPage, const 
   m_pGroundTypes->Build(pList);
 }
 
-float plQtAiProjectSettingsEngineDlg::BuildConfigBar(plUiElement* pPage, float y, const char* szLabel, plStringView sCurrent, bool bHasConfigs, const char* szPrefix, const char* szScrollView)
+float plAiProjectSettingsEngineDlg::BuildConfigBar(plUiElement* pPage, float y, const char* szLabel, plStringView sCurrent, bool bHasConfigs, const char* szPrefix, const char* szScrollView)
 {
   using namespace plEditorUi;
 
@@ -776,7 +775,7 @@ float plQtAiProjectSettingsEngineDlg::BuildConfigBar(plUiElement* pPage, float y
   return y + ControlHeight;
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildEmptyState(plUiElement* pPage, const plRectFloat& rect, const char* szLine, const char* szAction, const char* szActionId)
+void plAiProjectSettingsEngineDlg::BuildEmptyState(plUiElement* pPage, const plRectFloat& rect, const char* szLine, const char* szAction, const char* szActionId)
 {
   using namespace plEditorUi;
 
@@ -793,13 +792,13 @@ void plQtAiProjectSettingsEngineDlg::BuildEmptyState(plUiElement* pPage, const p
   PushButton(pPage, GetSurface()->GetBlackboard(), plRectFloat(rect.x + (rect.width - fButton) * 0.5f, fTop + 56.0f, fButton, ControlHeight), szAction, szActionId);
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildNumberRow(plEditorUiForm& ref_form, plUiElement* pParent, const NumberSetting& field)
+void plAiProjectSettingsEngineDlg::BuildNumberRow(plEditorUiForm& ref_form, plUiElement* pParent, const NumberSetting& field)
 {
   const plRectFloat row = ref_form.Row(field.m_szLabel, plEditorUi::ControlHeight, field.m_szToolTip);
   BuildNumberWell(pParent, plRectFloat(row.x, row.y, plMath::Min(field.m_fWidth, row.width), plEditorUi::ControlHeight), field);
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildNumberWell(plUiElement* pParent, const plRectFloat& rect, const NumberSetting& field)
+void plAiProjectSettingsEngineDlg::BuildNumberWell(plUiElement* pParent, const plRectFloat& rect, const NumberSetting& field)
 {
   using namespace plEditorUi;
 
@@ -815,7 +814,7 @@ void plQtAiProjectSettingsEngineDlg::BuildNumberWell(plUiElement* pParent, const
     SetToolTip(GetSurface()->GetBlackboard(), sName, field.m_szToolTip);
 }
 
-float plQtAiProjectSettingsEngineDlg::GetNavmeshContentHeight() const
+float plAiProjectSettingsEngineDlg::GetNavmeshContentHeight() const
 {
   const float fBar = s_fPagePadY + plEditorUi::ControlHeight + 10.0f;
 
@@ -826,7 +825,7 @@ float plQtAiProjectSettingsEngineDlg::GetNavmeshContentHeight() const
   return fBar + fCard + s_fPagePadY;
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildNavmesh(plUiElement* pPage, const plVec2& vSize)
+void plAiProjectSettingsEngineDlg::BuildNavmesh(plUiElement* pPage, const plVec2& vSize)
 {
   using namespace plEditorUi;
 
@@ -882,7 +881,7 @@ void plQtAiProjectSettingsEngineDlg::BuildNavmesh(plUiElement* pPage, const plVe
     BuildNumberRow(form, pCard, field);
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildPathSearch(plUiElement* pPage, const plVec2& vSize)
+void plAiProjectSettingsEngineDlg::BuildPathSearch(plUiElement* pPage, const plVec2& vSize)
 {
   using namespace plEditorUi;
 
@@ -912,7 +911,7 @@ void plQtAiProjectSettingsEngineDlg::BuildPathSearch(plUiElement* pPage, const p
     BuildPathSearchRow(pRows, i * RowHeight, fWidth, m_PathRows[i], m_Fields[i]);
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildPathSearchHeader(plUiElement* pPage, const plRectFloat& rect)
+void plAiProjectSettingsEngineDlg::BuildPathSearchHeader(plUiElement* pPage, const plRectFloat& rect)
 {
   using namespace plEditorUi;
 
@@ -940,7 +939,7 @@ void plQtAiProjectSettingsEngineDlg::BuildPathSearchHeader(plUiElement* pPage, c
   pRule->m_Color = Line();
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildPathSearchRow(plUiElement* pRows, float y, float fWidth, plUInt32 uiGroundType, const NumberSetting& cost)
+void plAiProjectSettingsEngineDlg::BuildPathSearchRow(plUiElement* pRows, float y, float fWidth, plUInt32 uiGroundType, const NumberSetting& cost)
 {
   using namespace plEditorUi;
 
@@ -962,7 +961,7 @@ void plQtAiProjectSettingsEngineDlg::BuildPathSearchRow(plUiElement* pRows, floa
   pRule->m_Color = plColorGammaUB(Line().r, Line().g, Line().b, 153);
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildTactical(plUiElement* pPage, const plVec2& vSize)
+void plAiProjectSettingsEngineDlg::BuildTactical(plUiElement* pPage, const plVec2& vSize)
 {
   using namespace plEditorUi;
 
@@ -982,7 +981,7 @@ void plQtAiProjectSettingsEngineDlg::BuildTactical(plUiElement* pPage, const plV
   AddPageToolTips(form);
 }
 
-void plQtAiProjectSettingsEngineDlg::BuildSquads(plUiElement* pPage, const plVec2& vSize)
+void plAiProjectSettingsEngineDlg::BuildSquads(plUiElement* pPage, const plVec2& vSize)
 {
   plEditorUiForm form(pPage, plRectFloat(s_fPagePadX, s_fPagePadY, vSize.x - 2.0f * s_fPagePadX, vSize.y - 2.0f * s_fPagePadY), s_fFormLabelWidth);
 
@@ -992,7 +991,7 @@ void plQtAiProjectSettingsEngineDlg::BuildSquads(plUiElement* pPage, const plVec
   AddPageToolTips(form);
 }
 
-void plQtAiProjectSettingsEngineDlg::AddPageToolTips(const plEditorUiForm& form)
+void plAiProjectSettingsEngineDlg::AddPageToolTips(const plEditorUiForm& form)
 {
   // the form's rects are in page units, the dialog's in body units
   plHybridArray<plEditorUiForm::ToolTip, 8> toolTips;
@@ -1006,7 +1005,7 @@ void plQtAiProjectSettingsEngineDlg::AddPageToolTips(const plEditorUiForm& form)
   AddBodyToolTips(toolTips);
 }
 
-void plQtAiProjectSettingsEngineDlg::AddDropdownAnchor(plStringView sElement, const plRectFloat& rect, const char* szScrollView)
+void plAiProjectSettingsEngineDlg::AddDropdownAnchor(plStringView sElement, const plRectFloat& rect, const char* szScrollView)
 {
   // rect is in page units (in the scroll view's content when there is one), the anchor in surface units
   DropdownAnchor& anchor = m_DropdownAnchors[sElement];
@@ -1014,7 +1013,7 @@ void plQtAiProjectSettingsEngineDlg::AddDropdownAnchor(plStringView sElement, co
   anchor.m_szScrollView = szScrollView;
 }
 
-float plQtAiProjectSettingsEngineDlg::GetScrollOffset(const char* szScrollView) const
+float plAiProjectSettingsEngineDlg::GetScrollOffset(const char* szScrollView) const
 {
   plHashTable<plString, float> positions;
   GetSurface()->GetCanvas().CaptureScrollPositions(positions);
@@ -1026,7 +1025,7 @@ float plQtAiProjectSettingsEngineDlg::GetScrollOffset(const char* szScrollView) 
 
 // Interaction
 
-void plQtAiProjectSettingsEngineDlg::ShowMenu(plStringView sElement, const plEditorUiMenu& menu, plDelegate<void(plUInt32)> onPick)
+void plAiProjectSettingsEngineDlg::ShowMenu(plStringView sElement, const plEditorUiMenu& menu, plDelegate<void(plUInt32)> onPick)
 {
   // under the clicked dropdown; from the keyboard under where it was built, moved by its page's scrolling
   plRectFloat anchor = m_PressedRect;
@@ -1045,7 +1044,7 @@ void plQtAiProjectSettingsEngineDlg::ShowMenu(plStringView sElement, const plEdi
   plEditorUiMenuView::Show(*GetSurface(), plVec2(anchor.x, anchor.y + anchor.height), menu, onPick);
 }
 
-void plQtAiProjectSettingsEngineDlg::ShowConfigMenu(bool bNavmesh)
+void plAiProjectSettingsEngineDlg::ShowConfigMenu(bool bNavmesh)
 {
   plEditorUiMenu menu;
   menu.m_fMinWidth = s_fConfigDropdownWidth;
@@ -1074,7 +1073,7 @@ void plQtAiProjectSettingsEngineDlg::ShowConfigMenu(bool bNavmesh)
       } });
 }
 
-void plQtAiProjectSettingsEngineDlg::ShowCollisionLayerMenu()
+void plAiProjectSettingsEngineDlg::ShowCollisionLayerMenu()
 {
   if (m_iNavmesh < 0)
     return;
@@ -1098,7 +1097,7 @@ void plQtAiProjectSettingsEngineDlg::ShowCollisionLayerMenu()
       Rebuild(); });
 }
 
-void plQtAiProjectSettingsEngineDlg::ShowCoverNavmeshMenu()
+void plAiProjectSettingsEngineDlg::ShowCoverNavmeshMenu()
 {
   const plString& sCurrent = m_Config.m_TacticalConfig.m_sCoverNavmesh;
 
@@ -1127,26 +1126,27 @@ void plQtAiProjectSettingsEngineDlg::ShowCoverNavmeshMenu()
       Rebuild(); });
 }
 
-void plQtAiProjectSettingsEngineDlg::AddConfig(bool bNavmesh)
+void plAiProjectSettingsEngineDlg::AddConfig(bool bNavmesh)
 {
   bool bOk = false;
-  QString sName;
+  plStringBuilder sName;
 
   if (bNavmesh)
   {
-    sName = plQtEnginePrompt::GetText(this, "Add Navmesh Config", "Name:", "New Navmesh", &bOk, [this](const QString& sText)
+    sName = plEnginePrompt::GetText("Add Navmesh Config", "Name:", "New Navmesh", &bOk, [this](plStringView sText)
       { return plAiProjectSettings::ValidateConfigName(sText, m_Config.m_NavmeshConfigs, "Navmesh"); });
   }
   else
   {
-    sName = plQtEnginePrompt::GetText(this, "Add Path Search Config", "Name:", "NewPathSearch", &bOk, [this](const QString& sText)
+    sName = plEnginePrompt::GetText("Add Path Search Config", "Name:", "NewPathSearch", &bOk, [this](plStringView sText)
       { return plAiProjectSettings::ValidateConfigName(sText, m_Config.m_PathSearchConfigs, "Path Search"); });
   }
 
   if (!bOk)
     return;
 
-  const plString sNewName = sName.trimmed().toUtf8().constData();
+  sName.Trim(" \t\r\n");
+  const plString sNewName = sName;
 
   // the field pointers go into the config arrays, which grow
   ClearFields();
@@ -1167,7 +1167,7 @@ void plQtAiProjectSettingsEngineDlg::AddConfig(bool bNavmesh)
   UpdateTabs();
 }
 
-void plQtAiProjectSettingsEngineDlg::RemoveConfig(bool bNavmesh)
+void plAiProjectSettingsEngineDlg::RemoveConfig(bool bNavmesh)
 {
   const plInt32 iIndex = bNavmesh ? m_iNavmesh : m_iPathSearch;
   const plInt32 iCount = static_cast<plInt32>(bNavmesh ? m_Config.m_NavmeshConfigs.GetCount() : m_Config.m_PathSearchConfigs.GetCount());
@@ -1176,7 +1176,7 @@ void plQtAiProjectSettingsEngineDlg::RemoveConfig(bool bNavmesh)
     return;
 
   const char* szQuestion = bNavmesh ? "Remove the current Navmesh Config?" : "Remove the current Path Search Config?";
-  if (plQtUiServices::MessageBoxQuestion(szQuestion, QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+  if (!plEngineDialog::AskYesNo(this, "Ai Project Settings", szQuestion, false))
     return;
 
   // the next config takes the place of the removed one; none is selected when it was the last
@@ -1204,7 +1204,7 @@ void plQtAiProjectSettingsEngineDlg::RemoveConfig(bool bNavmesh)
   UpdateTabs();
 }
 
-void plQtAiProjectSettingsEngineDlg::Reset()
+void plAiProjectSettingsEngineDlg::Reset()
 {
   LoadConfig();
 
@@ -1216,7 +1216,7 @@ void plQtAiProjectSettingsEngineDlg::Reset()
   Rebuild();
 }
 
-void plQtAiProjectSettingsEngineDlg::OnPointer(const plEditorUiPointerEvent& e)
+void plAiProjectSettingsEngineDlg::OnPointer(const plEditorUiPointerEvent& e)
 {
   if (e.m_Type != plEditorUiPointerEvent::Type::Press)
     return;
@@ -1244,7 +1244,7 @@ void plQtAiProjectSettingsEngineDlg::OnPointer(const plEditorUiPointerEvent& e)
   m_bToggledOnPress = true;
 }
 
-void plQtAiProjectSettingsEngineDlg::OnKey(const plEditorUiKeyEvent& e)
+void plAiProjectSettingsEngineDlg::OnKey(const plEditorUiKeyEvent& e)
 {
   m_bToggledOnPress = false;
   m_sPressedElement.Clear();
@@ -1272,14 +1272,14 @@ void plQtAiProjectSettingsEngineDlg::OnKey(const plEditorUiKeyEvent& e)
   e.m_bHandled = true;
 }
 
-void plQtAiProjectSettingsEngineDlg::OnUiEvent(const plMsgUiEvent& event)
+void plAiProjectSettingsEngineDlg::OnUiEvent(const plMsgUiEvent& event)
 {
   const plStringView sId = event.m_sIdentifier.GetView();
 
   // prompts and questions run after the current UI dispatch
-  auto defer = [this](void (plQtAiProjectSettingsEngineDlg::*pAction)(bool), bool bNavmesh)
+  auto defer = [this](void (plAiProjectSettingsEngineDlg::*pAction)(bool), bool bNavmesh)
   {
-    QTimer::singleShot(0, this, [this, pAction, bNavmesh]()
+    m_Timers.Start(plTime::MakeZero(), [this, pAction, bNavmesh]()
       { (this->*pAction)(bNavmesh); });
   };
 
@@ -1288,13 +1288,13 @@ void plQtAiProjectSettingsEngineDlg::OnUiEvent(const plMsgUiEvent& event)
   else if (sId == s_szPathConfig)
     ShowConfigMenu(false);
   else if (sId == s_szNavAdd || sId == s_szNavEmptyAdd)
-    defer(&plQtAiProjectSettingsEngineDlg::AddConfig, true);
+    defer(&plAiProjectSettingsEngineDlg::AddConfig, true);
   else if (sId == s_szPathAdd || sId == s_szPathEmptyAdd)
-    defer(&plQtAiProjectSettingsEngineDlg::AddConfig, false);
+    defer(&plAiProjectSettingsEngineDlg::AddConfig, false);
   else if (sId == s_szNavRemove)
-    defer(&plQtAiProjectSettingsEngineDlg::RemoveConfig, true);
+    defer(&plAiProjectSettingsEngineDlg::RemoveConfig, true);
   else if (sId == s_szPathRemove)
-    defer(&plQtAiProjectSettingsEngineDlg::RemoveConfig, false);
+    defer(&plAiProjectSettingsEngineDlg::RemoveConfig, false);
   else if (sId == s_szNavLayer)
     ShowCollisionLayerMenu();
   else if (sId == s_szCoverNavmesh)
@@ -1310,7 +1310,7 @@ void plQtAiProjectSettingsEngineDlg::OnUiEvent(const plMsgUiEvent& event)
   }
 }
 
-void plQtAiProjectSettingsEngineDlg::OnButton(plStringView sId)
+void plAiProjectSettingsEngineDlg::OnButton(plStringView sId)
 {
   if (sId == s_szSettingsReset)
   {
@@ -1329,5 +1329,5 @@ void plQtAiProjectSettingsEngineDlg::OnButton(plStringView sId)
     SaveConfig();
   }
 
-  plQtEngineDialog::OnButton(sId);
+  plEngineDialog::OnButton(sId);
 }

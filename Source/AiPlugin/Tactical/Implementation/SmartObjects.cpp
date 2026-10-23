@@ -85,6 +85,7 @@ bool plAiTacticalWorldModule::FindSmartObject(const plVec3& vPosition, float fRa
 {
   float fBestDistSqr = plMath::Square(fRadius);
   bool bFound = false;
+  const bool bAnyType = sType == plTempHashedString(""); // as when collecting smart objects for EQS
 
   for (plUInt32 uiEntry = 0; uiEntry < m_SmartObjects.GetCount(); ++uiEntry)
   {
@@ -98,7 +99,7 @@ bool plAiTacticalWorldModule::FindSmartObject(const plVec3& vPosition, float fRa
     if (!GetWorld()->TryGetComponent(entry.m_hComponent, pComponent) || !pComponent->IsActiveAndSimulating())
       continue;
 
-    if (pComponent->m_sType != sType)
+    if (!bAnyType && pComponent->m_sType != sType)
       continue;
 
     for (plUInt32 uiSlot = 0; uiSlot < entry.m_SlotClaims.GetCount(); ++uiSlot)
@@ -214,6 +215,13 @@ void plAiTacticalWorldModule::ReleaseSoClaimAtIndex(plUInt32 uiClaimIndex)
 
   SoClaim& claim = m_SoClaims[uiClaimIndex];
 
+  // lost mid-use (the object went away, a cover claim took over, the claimant died): the object hears that the use ended
+  if (claim.m_uiUsePhase != plAiSmartObjectUsePhase::NotUsing)
+  {
+    claim.m_uiUsePhase = plAiSmartObjectUsePhase::NotUsing;
+    SendUseEnded(claim);
+  }
+
   if (claim.m_hSlot.IsValid() && claim.m_hSlot.m_uiEntry < m_SmartObjects.GetCount())
   {
     SmartObjectEntry& entry = m_SmartObjects[claim.m_hSlot.m_uiEntry];
@@ -306,26 +314,31 @@ void plAiTacticalWorldModule::EndUse(plGameObjectHandle hUser)
     return;
 
   claim.m_uiUsePhase = plAiSmartObjectUsePhase::NotUsing;
+  SendUseEnded(claim);
+}
 
-  plVec3 vSlotPos;
-  plComponentHandle hComponent;
+void plAiTacticalWorldModule::SendUseEnded(const SoClaim& claim)
+{
+  // not ResolveSmartObject: an object that is being unregistered still has its component, and must hear the end
+  if (!claim.m_hSlot.IsValid() || claim.m_hSlot.m_uiEntry >= m_SmartObjects.GetCount())
+    return;
 
-  if (ResolveSmartObject(claim.m_hSlot, vSlotPos, hComponent))
-  {
-    plAiSmartObjectComponent* pComponent = nullptr;
+  const SmartObjectEntry& entry = m_SmartObjects[claim.m_hSlot.m_uiEntry];
+  if (entry.m_uiGeneration != claim.m_hSlot.m_uiGeneration)
+    return;
 
-    if (GetWorld()->TryGetComponent(hComponent, pComponent))
-    {
-      plMsgAiSmartObjectUse msg;
-      msg.m_hUser = hUser;
-      msg.m_hSmartObject = pComponent->GetOwner()->GetHandle();
-      msg.m_uiSlot = claim.m_hSlot.m_uiSlot;
-      msg.m_sType = pComponent->m_sType;
-      msg.m_bStart = false;
+  plAiSmartObjectComponent* pComponent = nullptr;
+  if (!GetWorld()->TryGetComponent(entry.m_hComponent, pComponent))
+    return;
 
-      pComponent->GetOwner()->SendMessage(msg);
-    }
-  }
+  plMsgAiSmartObjectUse msg;
+  msg.m_hUser = claim.m_hClaimant;
+  msg.m_hSmartObject = pComponent->GetOwner()->GetHandle();
+  msg.m_uiSlot = claim.m_hSlot.m_uiSlot;
+  msg.m_sType = pComponent->m_sType;
+  msg.m_bStart = false;
+
+  pComponent->GetOwner()->SendMessage(msg);
 }
 
 plAiSmartObjectUsePhase::Enum plAiTacticalWorldModule::GetUsePhase(plGameObjectHandle hUser) const
@@ -496,6 +509,15 @@ void plAiTacticalWorldModule::CollectFreeSmartObjectSlots(const plVec3& vCenter,
 
     out_positions.PushBack(found[i].m_vPosition);
   }
+}
+
+bool plAiTacticalWorldModule::IsSmartObjectHandleCurrent(const plAiSmartObjectHandle& hSlot) const
+{
+  if (!hSlot.IsValid() || hSlot.m_uiEntry >= m_SmartObjects.GetCount())
+    return false;
+
+  const SmartObjectEntry& entry = m_SmartObjects[hSlot.m_uiEntry];
+  return entry.m_bInUse && entry.m_uiGeneration == hSlot.m_uiGeneration && hSlot.m_uiSlot < entry.m_SlotClaims.GetCount();
 }
 
 bool plAiTacticalWorldModule::IsSmartObjectSlotClaimedByOther(const plAiSmartObjectHandle& hSlot, plGameObjectHandle hSelf) const

@@ -25,7 +25,7 @@ PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiBehaviorAssetObject, 1, plRTTIDefaultAllocat
   {
     PL_MEMBER_PROPERTY("Name", m_sName),
     PL_ENUM_MEMBER_PROPERTY("Category", plAiBehaviorCategory, m_Category),
-    PL_MEMBER_PROPERTY("Weight", m_fWeight)->AddAttributes(new plDefaultValueAttribute(1.0f), new plClampValueAttribute(0.0f, 10.0f)),
+    PL_MEMBER_PROPERTY("Weight", m_fWeight)->AddAttributes(new plDefaultValueAttribute(1.0f), new plClampValueAttribute(0.0f, 1.0f)),
     PL_MEMBER_PROPERTY("CommitBonus", m_fCommitBonus)->AddAttributes(new plDefaultValueAttribute(0.2f), new plClampValueAttribute(0.0f, 1.0f)),
     PL_MEMBER_PROPERTY("Cooldown", m_CooldownDuration),
     PL_ARRAY_MEMBER_PROPERTY("Considerations", m_Considerations)->AddFlags(plPropertyFlags::PointerOwner),

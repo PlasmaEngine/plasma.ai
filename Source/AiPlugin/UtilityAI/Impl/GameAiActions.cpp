@@ -203,11 +203,9 @@ plAiActionResult plAiActionLerpRotationTowards::Execute(plGameObject& owner, plT
     return plAiActionResult::Failed;
   }
 
+  // a target straight above, below or at the agent gives no direction to turn to: the agent faces it already
   if (vTargetDir.NormalizeIfNotZero(plVec3::MakeZero()).Failed())
-  {
-    plLog::Error(pLog, "plAiActionLerpRotationTowards: Invalid target direction {}/{}/{}", vTargetDir.x, vTargetDir.y, vTargetDir.z);
-    return plAiActionResult::Failed;
-  }
+    return plAiActionResult::Finished;
 
   if (vCurDir.IsEqual(vTargetDir, 0.001f))
     return plAiActionResult::Finished;

@@ -5,6 +5,10 @@
 #include <GameEngine/Gameplay/BlackboardComponent.h>
 #include <GameEngine/StateMachine/StateMachine.h>
 
+/// \brief Fails, with an error, when a state is read from data that a newer plasma.ai wrote (its stored type version is
+/// above the type's), instead of misreading its fields. Every AI state's Deserialize calls it.
+PL_AIPLUGIN_DLL plResult plAiCheckStateVersion(const plRTTI* pType);
+
 /// \brief State machine state that drives the owner's plAiNavigationComponent towards a position
 /// stored on the blackboard.
 ///

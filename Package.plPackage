@@ -8,14 +8,14 @@
 PackageInfo
 {
 	string %Id{"plasma.ai"}
-	string %Version{"1.1.11"}
+	string %Version{"1.2.0"}
 	string %Publisher{"PlasmaTechnology"}
 	string %License{"MIT"}
 	string %Homepage{"https://plasmagameengine.com"}
 
 	string %MinEngineVersion{"0.10.0"}
 	string %MaxEngineVersion{"0.10.0"}
-	string %AbiTag{"win64-msvc19-0.10.0-abi5-dev"}
+	string %AbiTag{"win64-msvc19-0.10.0-abi6-dev"}
 
 	string %DisplayName{"AI Plugin"}
 	string %Category{"AI"}
@@ -26,7 +26,7 @@ Recast and Detour are compiled into the plugin, so there is nothing else to inst
 	string %Banner{"Branding/AIBanner.png"}
 
 	string %EditorPlugins{"plEditorPluginAi"}
-	string %EditorEnginePlugins{}
+	string %EditorEnginePlugins{"plEnginePluginAi"}
 	string %RuntimePlugins{"plAiPlugin"}
 	string %PackageDependencies{"Recast.dll"}
 
@@ -42,4 +42,5 @@ Recast and Detour are compiled into the plugin, so there is nothing else to inst
 	Component { string %Name{"editor-win64"} string %Platform{"win64"} }
 	Component { string %Name{"icon"} string %Platform{"any"} }
 	Component { string %Name{"banner"} string %Platform{"any"} }
+	Component { string %Name{"editoricons"} string %Platform{"any"} string %Path{"EditorIcons"} }
 }

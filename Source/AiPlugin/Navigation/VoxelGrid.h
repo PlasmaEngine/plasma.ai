@@ -66,10 +66,37 @@ public:
   /// Clears all voxels overlapping the given world-space AABB (sets to free).
   void SubtractBox(const plBoundingBox& box);
 
+  /// The voxel coordinates overlapping a world-space AABB, clamped to the grid. False when they don't overlap.
+  bool GetCoordRange(const plBoundingBox& box, plVec3I32& out_vMin, plVec3I32& out_vMax) const;
+
   /// Ray-march visibility test between two world-space points.
   ///
-  /// Returns true if no occupied voxel blocks the line of sight.
+  /// Returns true if no occupied voxel blocks the line of sight. Where the line passes diagonally
+  /// between voxels, both side voxels must be free, so it never slips between two occupied corners.
   bool IsVisible(const plVec3& vObserver, const plVec3& vSubject) const;
+
+  /// \name Clearance
+  ///
+  /// Per voxel, the distance in voxels to the nearest occupied voxel (along any axis or diagonal):
+  /// 0 = occupied, 1 = free next to an occupied voxel, up to MaxClearance. Voxels outside the grid count as free.
+  ///@{
+
+  static constexpr plUInt8 MaxClearance = 8;
+
+  /// Computes the clearance of every voxel.
+  void BuildClearance();
+
+  /// Recomputes the clearance around a region whose voxels changed.
+  void UpdateClearance(const plBoundingBox& changedRegion);
+
+  /// The clearance of a voxel. MaxClearance before BuildClearance or outside the grid.
+  plUInt8 GetClearance(const plVec3I32& vCoord) const;
+
+  ///@}
+
+  /// Increased by the owner whenever occupancy changes, so paths can detect that they are out of date.
+  plUInt32 GetGeneration() const { return m_uiGeneration; }
+  void IncrementGeneration() { ++m_uiGeneration; }
 
   /// Returns the world-space AABB of the entire grid.
   plBoundingBox GetAABB() const;
@@ -92,6 +119,8 @@ private:
   static plUInt32 GetBitIndex(plUInt32 uiLocalX, plUInt32 uiLocalY, plUInt32 uiLocalZ);
 
   bool IsVisibleCoord(const plVec3I32& vStart, const plVec3I32& vGoal) const;
+  void ComputeClearance(const plVec3I32& vMin, const plVec3I32& vMax); ///< writes the clearance of [vMin, vMax]
+  plUInt32 GetVoxelIndex(const plVec3I32& vCoord) const { return ((plUInt32)vCoord.z * m_uiDimY + (plUInt32)vCoord.y) * m_uiDimX + (plUInt32)vCoord.x; }
 
   plUInt32 m_uiDimX = 0;
   plUInt32 m_uiDimY = 0;
@@ -106,4 +135,6 @@ private:
   plVec3 m_vOrigin = plVec3::MakeZero();
 
   plDynamicArray<plUInt64> m_Blocks;
+  plDynamicArray<plUInt8> m_Clearance; ///< one per voxel; empty until BuildClearance
+  plUInt32 m_uiGeneration = 0;
 };

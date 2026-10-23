@@ -12,8 +12,10 @@ plAiNavMeshSector::plAiNavMeshSector()
 {
   m_FlagRequested = 0;
   m_FlagInvalidate = 0;
-  m_FlagUpdateAvailable = 0;
+  m_FlagBuilding = 0;
   m_FlagUsable = 0;
+  m_FlagDirtyDuringBuild = 0;
+  m_FlagLastBuildFailed = 0;
 }
 
 plAiNavMeshSector::~plAiNavMeshSector() = default;
@@ -37,7 +39,14 @@ plAiNavMesh::plAiNavMesh(const plAiNavmeshConfig& navmeshConfig)
   np.maxTiles = navmeshConfig.m_uiNumSectorsX * navmeshConfig.m_uiNumSectorsY;
   np.maxPolys = 1 << 16;
 
-  m_pNavMesh->init(&np);
+  // fails when sector count and polygons per sector don't fit the poly reference bits (DT_POLYREF64)
+  m_bValid = dtStatusSucceed(m_pNavMesh->init(&np));
+
+  if (!m_bValid)
+  {
+    plLog::Error("Navmesh '{}' could not be created: {} x {} sectors with up to {} polygons each don't fit the navmesh polygon references.",
+      navmeshConfig.m_sName, navmeshConfig.m_uiNumSectorsX, navmeshConfig.m_uiNumSectorsY, np.maxPolys);
+  }
 }
 
 plAiNavMesh::~plAiNavMesh()
@@ -116,7 +125,7 @@ bool plAiNavMesh::RequestSector(const plVec2& vCenter, const plVec2& vHalfExtent
   return res;
 }
 
-void plAiNavMesh::InvalidateSector(const plVec2& vCenter, const plVec2& vHalfExtents, bool bRebuildAsSoonAsPossible)
+void plAiNavMesh::InvalidateSector(const plVec2& vCenter, const plVec2& vHalfExtents, bool bRebuildAsSoonAsPossible, plAiNavMeshRebuildReason reason)
 {
   plVec2I32 coordMin = CalculateSectorCoord(vCenter.x - vHalfExtents.x, vCenter.y - vHalfExtents.y);
   plVec2I32 coordMax = CalculateSectorCoord(vCenter.x + vHalfExtents.x, vCenter.y + vHalfExtents.y);
@@ -130,12 +139,12 @@ void plAiNavMesh::InvalidateSector(const plVec2& vCenter, const plVec2& vHalfExt
   {
     for (plInt32 x = coordMin.x; x <= coordMax.x; ++x)
     {
-      InvalidateSector(CalculateSectorID(plVec2I32(x, y)), bRebuildAsSoonAsPossible);
+      InvalidateSector(CalculateSectorID(plVec2I32(x, y)), bRebuildAsSoonAsPossible, reason);
     }
   }
 }
 
-void plAiNavMesh::InvalidateSector(SectorID sectorID, bool bRebuildAsSoonAsPossible)
+void plAiNavMesh::InvalidateSector(SectorID sectorID, bool bRebuildAsSoonAsPossible, plAiNavMeshRebuildReason reason)
 {
   auto it = m_Sectors.Find(sectorID);
   if (!it.IsValid())
@@ -143,17 +152,67 @@ void plAiNavMesh::InvalidateSector(SectorID sectorID, bool bRebuildAsSoonAsPossi
 
   auto& sector = it.Value();
 
-  if (sector.m_FlagInvalidate == 0 && (sector.m_FlagUsable == 1 || sector.m_FlagUpdateAvailable == 1))
+  // the running build may have sampled the geometry before this change
+  if (sector.m_FlagBuilding == 1)
   {
-    if (bRebuildAsSoonAsPossible)
+    sector.m_FlagDirtyDuringBuild = 1;
+    sector.m_PendingReason = reason;
+    return;
+  }
+
+  // a sector that is only queued will sample the current geometry anyway
+  if (sector.m_FlagInvalidate == 1 || sector.m_FlagUsable == 0)
+    return;
+
+  if (bRebuildAsSoonAsPossible)
+  {
+    sector.m_FlagInvalidate = 1;
+    sector.m_PendingReason = reason;
+    m_RequestedSectors.PushBack(sectorID);
+  }
+  else
+  {
+    sector.m_FlagRequested = 0;
+    m_UnloadingSectors.PushBack(sectorID);
+  }
+}
+
+plAiNavMeshSector& plAiNavMesh::BeginSectorBuild(SectorID sectorID)
+{
+  plAiNavMeshSector& sector = m_Sectors.FindOrAdd(sectorID).Value();
+  sector.m_FlagBuilding = 1;
+  sector.m_FlagDirtyDuringBuild = 0;
+  sector.m_BuildReason = sector.m_PendingReason;
+  return sector;
+}
+
+void plAiNavMesh::GetSectorStatus(plDynamicArray<plAiNavMeshSectorStatus>& out_status) const
+{
+  out_status.Clear();
+
+  for (auto it = m_Sectors.GetIterator(); it.IsValid(); ++it)
+  {
+    const plAiNavMeshSector& sector = it.Value();
+
+    if (sector.m_FlagRequested == 0 && sector.m_FlagUsable == 0 && sector.m_FlagBuilding == 0)
+      continue; // never requested, or unloaded
+
+    plAiNavMeshSectorStatus& status = out_status.ExpandAndGetRef();
+    status.m_uiSectorID = it.Key();
+    status.m_vCoord = CalculateSectorCoord(it.Key());
+    status.m_LastReason = sector.m_LastReason;
+    status.m_uiPolyCount = sector.m_uiPolyCount;
+    status.m_uiBuildCount = sector.m_uiBuildCount;
+    status.m_LastBuildDuration = sector.m_LastBuildDuration;
+
+    if (sector.m_FlagUsable == 1)
     {
-      sector.m_FlagInvalidate = 1;
-      m_RequestedSectors.PushBack(sectorID);
+      const bool bRebuildPending = sector.m_FlagBuilding == 1 || sector.m_FlagInvalidate == 1;
+      status.m_State = bRebuildPending ? plAiNavMeshSectorState::Rebuilding : (sector.m_FlagLastBuildFailed ? plAiNavMeshSectorState::Failed : plAiNavMeshSectorState::Ready);
     }
     else
     {
-      sector.m_FlagRequested = 0;
-      m_UnloadingSectors.PushBack(sectorID);
+      status.m_State = (sector.m_FlagBuilding == 1) ? plAiNavMeshSectorState::Building : plAiNavMeshSectorState::Queued;
     }
   }
 }
@@ -170,7 +229,7 @@ void plAiNavMesh::FinalizeSectorUpdates(plDynamicArray<SectorID>* out_pChangedSe
 
     auto& sector = m_Sectors[sectorID];
 
-    PL_ASSERT_DEV(sector.m_FlagUpdateAvailable == 1, "Invalid sector update state");
+    PL_ASSERT_DEV(sector.m_FlagBuilding == 1, "Invalid sector update state");
 
     if (out_pChangedSectors != nullptr)
     {
@@ -214,8 +273,22 @@ void plAiNavMesh::FinalizeSectorUpdates(plDynamicArray<SectorID>* out_pChangedSe
     }
 
     sector.m_FlagInvalidate = 0;
-    sector.m_FlagUpdateAvailable = 0;
+    sector.m_FlagBuilding = 0;
     // sector.m_FlagRequested = 0; // do not reset the requested flag
+
+    sector.m_uiPolyCount = sector.m_uiBuildPolyCount;
+    sector.m_LastBuildDuration = sector.m_BuildDuration;
+    sector.m_FlagLastBuildFailed = sector.m_bBuildFailed ? 1 : 0;
+    sector.m_LastReason = sector.m_BuildReason;
+    ++sector.m_uiBuildCount;
+
+    if (sector.m_FlagDirtyDuringBuild == 1)
+    {
+      // invalidated while building: rebuild with the current geometry (the reason was set by InvalidateSector)
+      sector.m_FlagDirtyDuringBuild = 0;
+      sector.m_FlagInvalidate = 1;
+      m_RequestedSectors.PushBack(sectorID);
+    }
   }
 
   m_UpdatingSectors.Clear();
@@ -248,8 +321,8 @@ void plAiNavMesh::FinalizeSectorUpdates(plDynamicArray<SectorID>* out_pChangedSe
 
     sector.m_FlagRequested = 0;
     sector.m_FlagInvalidate = 0;
-    sector.m_FlagUpdateAvailable = 0;
     sector.m_FlagUsable = 0;
+    sector.m_PendingReason = plAiNavMeshRebuildReason::FirstBuild;
   }
 
   m_UnloadingSectors.Clear();
@@ -258,6 +331,19 @@ void plAiNavMesh::FinalizeSectorUpdates(plDynamicArray<SectorID>* out_pChangedSe
   {
     // path corridors compare this to detect that their cached polygon references may be stale
     m_uiNavMeshGeneration.Increment();
+    DropStalePatchedAreas();
+  }
+}
+
+void plAiNavMesh::DropStalePatchedAreas()
+{
+  // polygons of a rebuilt tile carry its fresh bake (patches are stamped again); unloaded ones are gone
+  for (auto it = m_PatchedAreas.GetIterator(); it.IsValid();)
+  {
+    if (!m_pNavMesh->isValidPolyRef(it.Key()))
+      it = m_PatchedAreas.Remove(it);
+    else
+      ++it;
   }
 }
 
@@ -269,7 +355,7 @@ plAiNavMesh::SectorID plAiNavMesh::RetrieveRequestedSector()
   {
     const plAiNavMeshSector* pSector = GetSector(m_RequestedSectors[i]);
 
-    if (pSector != nullptr && pSector->m_FlagUpdateAvailable == 1)
+    if (pSector != nullptr && pSector->m_FlagBuilding == 1)
     {
       // the previous build of this sector has not been finalized yet - starting another build
       // now would collide with it; keep it queued and look at the next entry
@@ -375,12 +461,82 @@ plUInt32 plAiNavMesh::ApplyFlagPatch(const plBoundingBox& worldBox, plUInt16 uiS
 
     m_pNavMesh->setPolyFlags(polyRefs[i], (uiFlags | uiSetFlags) & ~uiClearFlags);
 
-    if (uiSetArea != 0xFF)
+    if (uiSetArea == RestoreBakedArea)
     {
+      plUInt8 uiBaked = 0;
+      if (m_PatchedAreas.Remove(polyRefs[i], &uiBaked))
+      {
+        m_pNavMesh->setPolyArea(polyRefs[i], uiBaked);
+      }
+    }
+    else if (uiSetArea != 0xFF)
+    {
+      // remember the baked area (a ground type) the first time a patch replaces it
+      unsigned char uiCurrent = 0;
+      if (!m_PatchedAreas.Contains(polyRefs[i]) && dtStatusSucceed(m_pNavMesh->getPolyArea(polyRefs[i], &uiCurrent)))
+      {
+        m_PatchedAreas.Insert(polyRefs[i], uiCurrent);
+      }
+
       m_pNavMesh->setPolyArea(polyRefs[i], uiSetArea);
     }
 
     ++uiNumPatched;
+  }
+
+  if (uiSetFlags != 0 || uiClearFlags != 0)
+  {
+    uiNumPatched += PatchNavLinks(containTest, uiSetFlags, uiClearFlags);
+  }
+
+  return uiNumPatched;
+}
+
+plUInt32 plAiNavMesh::PatchNavLinks(const plBoundingBox& containTest, plUInt16 uiSetFlags, plUInt16 uiClearFlags)
+{
+  // the polygon query never returns off-mesh connections: visit the links of the tiles under the box. A blocker on
+  // either end of a link closes it (a door in front of a ladder); the link's area stays as it is.
+  int iMinX = 0, iMinY = 0, iMaxX = 0, iMaxY = 0;
+  const plRcPos vMin = containTest.m_vMin;
+  const plRcPos vMax = containTest.m_vMax;
+  m_pNavMesh->calcTileLoc(vMin, &iMinX, &iMinY);
+  m_pNavMesh->calcTileLoc(vMax, &iMaxX, &iMaxY);
+
+  plUInt32 uiNumPatched = 0;
+  constexpr int iMaxTilesPerCell = 4;
+  const dtMeshTile* tiles[iMaxTilesPerCell];
+
+  for (int y = plMath::Min(iMinY, iMaxY); y <= plMath::Max(iMinY, iMaxY); ++y)
+  {
+    for (int x = plMath::Min(iMinX, iMaxX); x <= plMath::Max(iMinX, iMaxX); ++x)
+    {
+      const int iNumTiles = m_pNavMesh->getTilesAt(x, y, tiles, iMaxTilesPerCell);
+
+      for (int t = 0; t < iNumTiles; ++t)
+      {
+        const dtMeshTile* pTile = tiles[t];
+        const dtPolyRef base = m_pNavMesh->getPolyRefBase(pTile);
+
+        for (int c = 0; c < pTile->header->offMeshConCount; ++c)
+        {
+          const dtOffMeshConnection& link = pTile->offMeshCons[c];
+          const plVec3 vStart = plVec3(plRcPos(&link.pos[0]));
+          const plVec3 vEnd = plVec3(plRcPos(&link.pos[3]));
+
+          if (!containTest.Contains(vStart) && !containTest.Contains(vEnd))
+            continue;
+
+          const dtPolyRef linkRef = base | static_cast<dtPolyRef>(link.poly);
+
+          unsigned short uiFlags = 0;
+          if (dtStatusFailed(m_pNavMesh->getPolyFlags(linkRef, &uiFlags)))
+            continue;
+
+          m_pNavMesh->setPolyFlags(linkRef, (uiFlags | uiSetFlags) & ~uiClearFlags);
+          ++uiNumPatched;
+        }
+      }
+    }
   }
 
   return uiNumPatched;

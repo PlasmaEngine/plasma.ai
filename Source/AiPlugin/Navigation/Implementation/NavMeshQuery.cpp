@@ -27,7 +27,9 @@ void plAiNavmeshQuery::SetQueryFilter(const dtQueryFilter& filter)
 
 bool plAiNavmeshQuery::PrepareQueryArea(const plVec3& vCenter, float fRadius)
 {
-  PL_ASSERT_DEV(m_pNavmesh != nullptr, "Navmesh has not been set.");
+  if (m_pNavmesh == nullptr)
+    return false;
+
   return m_pNavmesh->RequestSector(vCenter.GetAsVec2(), plVec2(fRadius));
 }
 

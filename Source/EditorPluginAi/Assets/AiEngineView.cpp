@@ -5,13 +5,12 @@
 #include <AiPlugin/UtilityAI/Decision/AiScoring.h>
 #include <AiPlugin/Utils/AiResponseCurve.h>
 #include <Core/Utils/Blackboard.h>
+#include <EditorUi/Runtime.h>
 #include <EditorUi/Surface.h>
 #include <Foundation/Math/ColorScheme.h>
 #include <Foundation/Tracks/Curve1D.h>
 #include <Foundation/Utilities/ConversionUtils.h>
 #include <GameUiPlugin/Components/UiCanvasComponent.h>
-
-#include <QTimer>
 
 namespace
 {
@@ -363,29 +362,29 @@ void plAiFlowLayout::Wrap()
 }
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiEngineView
+// plAiEngineView
 
-plQtAiEngineView::plQtAiEngineView(const char* szName)
+plAiEngineView::plAiEngineView(const char* szName)
   : plEditorUiContent(szName)
   , m_pAlive(std::make_shared<bool>(true))
 {
   if (IsReady())
-    m_PointerSubscription = GetSurface()->m_PointerEvents.AddEventHandler(plMakeDelegate(&plQtAiEngineView::OnPointer, this));
+    m_PointerSubscription = GetSurface()->m_PointerEvents.AddEventHandler(plMakeDelegate(&plAiEngineView::OnPointer, this));
 }
 
-plQtAiEngineView::~plQtAiEngineView()
+plAiEngineView::~plAiEngineView()
 {
   if (IsReady())
     GetSurface()->m_PointerEvents.RemoveEventHandler(m_PointerSubscription);
 }
 
-void plQtAiEngineView::Invalidate()
+void plAiEngineView::Invalidate()
 {
   m_bRebuild = true;
   RequestRedraw();
 }
 
-bool plQtAiEngineView::ActivateControl(plStringView sName)
+bool plAiEngineView::ActivateControl(plStringView sName)
 {
   auto it = m_Controls.Find(sName);
   if (!it.IsValid() || !it.Value().m_bEnabled || !it.Value().m_OnClick)
@@ -396,7 +395,7 @@ bool plQtAiEngineView::ActivateControl(plStringView sName)
   return true;
 }
 
-bool plQtAiEngineView::CommitControl(plStringView sName, plStringView sText)
+bool plAiEngineView::CommitControl(plStringView sName, plStringView sText)
 {
   auto it = m_Controls.Find(sName);
   if (!it.IsValid() || it.Value().m_Kind != Kind::Field)
@@ -407,17 +406,17 @@ bool plQtAiEngineView::CommitControl(plStringView sName, plStringView sText)
   return true;
 }
 
-bool plQtAiEngineView::HasControl(plStringView sName) const
+bool plAiEngineView::HasControl(plStringView sName) const
 {
   return m_Controls.Find(sName).IsValid();
 }
 
-void plQtAiEngineView::OnUiUpdate()
+void plAiEngineView::OnUiUpdate()
 {
   if (!IsReady())
     return;
 
-  if ((m_bRebuild || GetSurface()->GetLogicalSize() != m_vBuiltSize) && !IsRebuildBlocked())
+  if ((m_bRebuild || GetSurface()->GetLogicalSize() != m_vBuiltSize) && !IsRebuildBlocked() && !IsPointerHeld())
     Rebuild();
 
   PollFocus();
@@ -425,7 +424,7 @@ void plQtAiEngineView::OnUiUpdate()
   OnViewUpdate();
 }
 
-void plQtAiEngineView::Rebuild()
+void plAiEngineView::Rebuild()
 {
   using namespace plEditorUi;
 
@@ -449,7 +448,7 @@ void plQtAiEngineView::Rebuild()
   m_sKeepFocus.Clear();
 }
 
-plQtAiEngineView::Control& plQtAiEngineView::Register(plStringView sName, Kind kind, const plRectFloat& rect, plStringView sTooltip, bool bEnabled)
+plAiEngineView::Control& plAiEngineView::Register(plStringView sName, Kind kind, const plRectFloat& rect, plStringView sTooltip, bool bEnabled)
 {
   Control& control = m_Controls[sName];
   control = Control();
@@ -462,7 +461,7 @@ plQtAiEngineView::Control& plQtAiEngineView::Register(plStringView sName, Kind k
   return control;
 }
 
-plUiTextInput* plQtAiEngineView::AddTextField(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sText, plStringView sPlaceholder, plStringView sTooltip, TextAction onCommit)
+plUiTextInput* plAiEngineView::AddTextField(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sText, plStringView sPlaceholder, plStringView sTooltip, TextAction onCommit)
 {
   Control& control = Register(sName, Kind::Field, rect, sTooltip, true);
   control.m_sBinding = Entry(sName, ".Text");
@@ -480,7 +479,7 @@ plUiTextInput* plQtAiEngineView::AddTextField(plUiElement* pParent, const plRect
   return pInput;
 }
 
-plUiTextInput* plQtAiEngineView::AddNumberField(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sText, plStringView sUnit, plStringView sTooltip, TextAction onCommit)
+plUiTextInput* plAiEngineView::AddNumberField(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sText, plStringView sUnit, plStringView sTooltip, TextAction onCommit)
 {
   Control& control = Register(sName, Kind::Field, rect, sTooltip, true);
   control.m_sBinding = Entry(sName, ".Text");
@@ -493,7 +492,7 @@ plUiTextInput* plQtAiEngineView::AddNumberField(plUiElement* pParent, const plRe
   return plEditorUi::NumberField(pParent, rect, sName, control.m_sBinding, Entry(sName, ".Submit"), {}, sUnit);
 }
 
-plUiButton* plQtAiEngineView::AddDropdown(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sText, plStringView sTooltip, Action onClick, bool bEnabled, bool bValueRight, plColorGammaUB dotColor)
+plUiButton* plAiEngineView::AddDropdown(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sText, plStringView sTooltip, Action onClick, bool bEnabled, bool bValueRight, plColorGammaUB dotColor)
 {
   using namespace plEditorUi;
 
@@ -532,7 +531,7 @@ plUiButton* plQtAiEngineView::AddDropdown(plUiElement* pParent, const plRectFloa
   return pButton;
 }
 
-plUiButton* plQtAiEngineView::AddIconButton(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plEditorUi::Icon icon, plStringView sTooltip, Action onClick, bool bEnabled)
+plUiButton* plAiEngineView::AddIconButton(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plEditorUi::Icon icon, plStringView sTooltip, Action onClick, bool bEnabled)
 {
   using namespace plEditorUi;
 
@@ -555,7 +554,7 @@ plUiButton* plQtAiEngineView::AddIconButton(plUiElement* pParent, const plRectFl
   return pButton;
 }
 
-plUiButton* plQtAiEngineView::AddTextButton(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, plStringView sTooltip, Action onClick, bool bAddIcon, bool bEnabled)
+plUiButton* plAiEngineView::AddTextButton(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, plStringView sTooltip, Action onClick, bool bAddIcon, bool bEnabled)
 {
   using namespace plEditorUi;
 
@@ -583,7 +582,7 @@ plUiButton* plQtAiEngineView::AddTextButton(plUiElement* pParent, const plRectFl
   return pButton;
 }
 
-plUiButton* plQtAiEngineView::AddCheckBox(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, bool bChecked, plStringView sTooltip, Action onToggle, bool bEnabled, plColorGammaUB labelColor)
+plUiButton* plAiEngineView::AddCheckBox(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, bool bChecked, plStringView sTooltip, Action onToggle, bool bEnabled, plColorGammaUB labelColor)
 {
   using namespace plEditorUi;
 
@@ -633,7 +632,39 @@ plUiButton* plQtAiEngineView::AddCheckBox(plUiElement* pParent, const plRectFloa
   return pButton;
 }
 
-plUiButton* plQtAiEngineView::AddClickArea(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sTooltip, Action onClick, Action onContext)
+plUiButton* plAiEngineView::AddChip(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sLabel, bool bOn, plColorGammaUB dotColor, plStringView sTooltip, Action onClick)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  auto* pPlate = Panel(pParent);
+  Place(pPlate, rect);
+  pPlate->m_Color = bOn ? Mix(Surface(), Accent(), 0.16f) : Raised();
+  pPlate->m_vCornerRadius = plVec4(rect.height * 0.5f);
+  pPlate->m_fBorderWidth = 1.0f;
+  pPlate->m_BorderColor = bOn ? Mix(Surface(), Accent(), 0.55f) : Line();
+
+  float x = 9.0f;
+  if (dotColor.a > 0)
+  {
+    auto* pDot = Panel(pPlate);
+    Place(pDot, plRectFloat(x, rect.height * 0.5f - 4.0f, 8.0f, 8.0f));
+    pDot->m_Color = dotColor;
+    pDot->m_vCornerRadius = plVec4(4.0f);
+    x += 14.0f;
+  }
+
+  Label(pPlate, plRectFloat(x, 0.0f, rect.width - x - 6.0f, rect.height), sLabel, bOn ? Foreground() : Muted(), FontSize - 2)->m_Overflow = plUiTextOverflow::Overflow;
+
+  return AddClickArea(pParent, rect, sName, sTooltip, std::move(onClick));
+}
+
+float plAiEngineView::ChipWidth(plStringView sLabel, bool bDot)
+{
+  return plAiEngineUi::TextWidth(sLabel, plEditorUi::FontSize - 2) + (bDot ? 14.0f : 0.0f) + 18.0f;
+}
+
+plUiButton* plAiEngineView::AddClickArea(plUiElement* pParent, const plRectFloat& rect, plStringView sName, plStringView sTooltip, Action onClick, Action onContext)
 {
   Control& control = Register(sName, Kind::Button, rect, sTooltip, true);
   control.m_OnClick = std::move(onClick);
@@ -646,7 +677,7 @@ plUiButton* plQtAiEngineView::AddClickArea(plUiElement* pParent, const plRectFlo
   return pButton;
 }
 
-plUiSlider* plQtAiEngineView::AddSlider(plUiElement* pParent, const plRectFloat& rect, plStringView sName, float fMin, float fMax, float fValue, plStringView sTooltip, ValueAction onValue)
+plUiSlider* plAiEngineView::AddSlider(plUiElement* pParent, const plRectFloat& rect, plStringView sName, float fMin, float fMax, float fValue, plStringView sTooltip, ValueAction onValue)
 {
   using namespace plEditorUi;
 
@@ -670,20 +701,20 @@ plUiSlider* plQtAiEngineView::AddSlider(plUiElement* pParent, const plRectFloat&
   return pSlider;
 }
 
-plUiDrawList* plQtAiEngineView::AddDrawList(plUiElement* pParent, const plRectFloat& rect, plStringView sName)
+plUiDrawList* plAiEngineView::AddDrawList(plUiElement* pParent, const plRectFloat& rect, plStringView sName)
 {
   plUiDrawList* pList = plEditorUi::DrawList(pParent, sName, sName);
   plAiEngineUi::Place(pList, rect);
   return pList;
 }
 
-void plQtAiEngineView::AddAction(plStringView sName, plStringView sTooltip, Action onClick)
+void plAiEngineView::AddAction(plStringView sName, plStringView sTooltip, Action onClick)
 {
   Control& control = Register(sName, Kind::Button, plRectFloat(0, 0, 0, 0), sTooltip, true);
   control.m_OnClick = std::move(onClick);
 }
 
-plUiScrollView* plQtAiEngineView::AddScrollBody(plUiElement* pParent, const plRectFloat& rect, plStringView sName, float fPadding, float fSpacing)
+plUiScrollView* plAiEngineView::AddScrollBody(plUiElement* pParent, const plRectFloat& rect, plStringView sName, float fPadding, float fSpacing)
 {
   plUiScrollView* pScroll = PL_DEFAULT_NEW(plUiScrollView);
   pParent->m_Children.PushBack(pScroll);
@@ -698,12 +729,12 @@ plUiScrollView* plQtAiEngineView::AddScrollBody(plUiElement* pParent, const plRe
   return pScroll;
 }
 
-void plQtAiEngineView::SetChecked(plStringView sName, bool bChecked)
+void plAiEngineView::SetChecked(plStringView sName, bool bChecked)
 {
   GetBoard().SetEntryValue(Entry(sName, ".On"), bChecked);
 }
 
-void plQtAiEngineView::SetSliderValue(plStringView sName, float fValue)
+void plAiEngineView::SetSliderValue(plStringView sName, float fValue)
 {
   auto it = m_Controls.Find(sName);
   if (!it.IsValid() || it.Value().m_Kind != Kind::Slider)
@@ -713,7 +744,7 @@ void plQtAiEngineView::SetSliderValue(plStringView sName, float fValue)
   GetBoard().SetEntryValue(it.Value().m_sBinding, fValue);
 }
 
-void plQtAiEngineView::OnUiEvent(const plMsgUiEvent& event)
+void plAiEngineView::OnUiEvent(const plMsgUiEvent& event)
 {
   const plStringView sId = event.m_sIdentifier.GetView();
 
@@ -735,7 +766,7 @@ void plQtAiEngineView::OnUiEvent(const plMsgUiEvent& event)
   action();
 }
 
-void plQtAiEngineView::CommitField(const plString& sName)
+void plAiEngineView::CommitField(const plString& sName)
 {
   auto it = m_Controls.Find(sName);
   if (!it.IsValid() || it.Value().m_Kind != Kind::Field)
@@ -755,7 +786,7 @@ void plQtAiEngineView::CommitField(const plString& sName)
   }
 }
 
-void plQtAiEngineView::PollFocus()
+void plAiEngineView::PollFocus()
 {
   // a field commits when focus leaves it, as on Enter
   const plString sFocused(GetSurface()->GetCanvas().GetFocusedElementName());
@@ -769,8 +800,21 @@ void plQtAiEngineView::PollFocus()
     CommitField(sLeft);
 }
 
-void plQtAiEngineView::OnFocusLost()
+bool plAiEngineView::IsPointerHeld() const
 {
+  // a release the surface never saw (the button let go over another window) must not freeze the view
+  const plTime now = plTime::Now();
+  if (m_bPointerHeld)
+    return (now - m_PointerPressTime).GetSeconds() < 2.0;
+
+  // the canvas completes the click in its next update, which runs after this view's
+  return (now - m_PointerReleaseTime).GetSeconds() < 0.15;
+}
+
+void plAiEngineView::OnFocusLost()
+{
+  m_bPointerHeld = false;
+
   // another panel or window took the keys: the field being typed in commits, as when focus leaves it
   const plString sLeft = m_sFocusedField;
   m_sFocusedField.Clear();
@@ -779,7 +823,7 @@ void plQtAiEngineView::OnFocusLost()
     CommitField(sLeft);
 }
 
-void plQtAiEngineView::PollSliders()
+void plAiEngineView::PollSliders()
 {
   // sliders write their entry while they are dragged
   for (auto it = m_Controls.GetIterator(); it.IsValid(); ++it)
@@ -802,10 +846,21 @@ void plQtAiEngineView::PollSliders()
   }
 }
 
-void plQtAiEngineView::OnPointer(const plEditorUiPointerEvent& e)
+void plAiEngineView::OnPointer(const plEditorUiPointerEvent& e)
 {
   using Type = plEditorUiPointerEvent::Type;
   using Button = plEditorUiPointerEvent::Button;
+
+  if (e.m_Type == Type::Press)
+  {
+    m_bPointerHeld = true;
+    m_PointerPressTime = plTime::Now();
+  }
+  else if (e.m_Type == Type::Release || e.m_Type == Type::Drop || e.m_Type == Type::DragCancel)
+  {
+    m_bPointerHeld = false;
+    m_PointerReleaseTime = plTime::Now();
+  }
 
   if (e.m_Type == Type::Press)
   {
@@ -831,7 +886,7 @@ void plQtAiEngineView::OnPointer(const plEditorUiPointerEvent& e)
   OnViewPointer(e);
 }
 
-plVec2 plQtAiEngineView::GetMenuPosition(plStringView sAnchor) const
+plVec2 plAiEngineView::GetMenuPosition(plStringView sAnchor) const
 {
   if (!m_sContextElement.IsEmpty() && sAnchor == m_sContextElement)
     return m_vContextPosition;
@@ -846,19 +901,19 @@ plVec2 plQtAiEngineView::GetMenuPosition(plStringView sAnchor) const
   return GetSurface()->GetLogicalSize() * 0.5f;
 }
 
-void plQtAiEngineView::ShowMenu(plStringView sAnchor, const plEditorUiMenu& menu, PickAction onPick)
+void plAiEngineView::ShowMenu(plStringView sAnchor, const plEditorUiMenu& menu, PickAction onPick)
 {
   m_MenuPick = std::move(onPick);
-  plEditorUiMenuView::Show(*GetSurface(), GetMenuPosition(sAnchor), menu, plMakeDelegate(&plQtAiEngineView::OnMenuPick, this));
+  plEditorUiMenuView::Show(*GetSurface(), GetMenuPosition(sAnchor), menu, plMakeDelegate(&plAiEngineView::OnMenuPick, this));
 }
 
-void plQtAiEngineView::ShowSearchMenu(plStringView sAnchor, plArrayPtr<const plEditorUiSearchMenuItem> items, plStringView sPlaceholder, PickAction onPick)
+void plAiEngineView::ShowSearchMenu(plStringView sAnchor, plArrayPtr<const plEditorUiSearchMenuItem> items, plStringView sPlaceholder, PickAction onPick)
 {
   m_MenuPick = std::move(onPick);
-  plEditorUiSearchMenuView::Show(*GetSurface(), GetMenuPosition(sAnchor), items, sPlaceholder, plMakeDelegate(&plQtAiEngineView::OnMenuPick, this));
+  plEditorUiSearchMenuView::Show(*GetSurface(), GetMenuPosition(sAnchor), items, sPlaceholder, plMakeDelegate(&plAiEngineView::OnMenuPick, this));
 }
 
-void plQtAiEngineView::OnMenuPick(plUInt32 uiId)
+void plAiEngineView::OnMenuPick(plUInt32 uiId)
 {
   if (!m_MenuPick)
     return;
@@ -868,10 +923,10 @@ void plQtAiEngineView::OnMenuPick(plUInt32 uiId)
   action(uiId);
 }
 
-void plQtAiEngineView::Defer(Action action)
+void plAiEngineView::Defer(Action action)
 {
   std::weak_ptr<bool> alive = m_pAlive;
-  QTimer::singleShot(0, [alive, action = std::move(action)]()
+  plEditorUiRuntime::RunAfterFrame([alive, action = std::move(action)]()
     {
       if (!alive.expired())
         action(); });

@@ -179,12 +179,15 @@ void plNavMeshObstacleComponent::InvalidateObstacleBounds(bool bRebuildAsSoonAsP
   for (const auto& navConfig : pNavMeshModule->GetConfig().m_NavmeshConfigs)
   {
     plAiNavMesh* pNavMesh = pNavMeshModule->GetNavMesh(navConfig.m_sName);
+    if (pNavMesh == nullptr)
+      continue;
+
     const plUInt8 uiCollisionLayer = navConfig.m_uiCollisionLayer;
 
     const auto bounds = pPhysics->GetWorldSpaceBounds(GetOwner(), uiCollisionLayer, plPhysicsShapeType::Static | plPhysicsShapeType::Dynamic, true);
     if (bounds.IsValid())
     {
-      pNavMesh->InvalidateSector(bounds.GetBox().GetCenter().GetAsVec2(), bounds.GetBox().GetHalfExtents().GetAsVec2(), bRebuildAsSoonAsPossible);
+      pNavMesh->InvalidateSector(bounds.GetBox().GetCenter().GetAsVec2(), bounds.GetBox().GetHalfExtents().GetAsVec2(), bRebuildAsSoonAsPossible, plAiNavMeshRebuildReason::Obstacle);
       invalidatedBounds.ExpandToInclude(bounds.GetBox());
     }
   }
@@ -244,13 +247,15 @@ void plNavMeshObstacleComponent::Update()
   for (const auto& navConfig : pNavMeshModule->GetConfig().m_NavmeshConfigs)
   {
     plAiNavMesh* pNavMesh = pNavMeshModule->GetNavMesh(navConfig.m_sName);
+    if (pNavMesh == nullptr)
+      continue;
 
     if (m_LastInvalidatedBounds.IsValid())
     {
-      pNavMesh->InvalidateSector(m_LastInvalidatedBounds.GetCenter().GetAsVec2(), m_LastInvalidatedBounds.GetHalfExtents().GetAsVec2(), true);
+      pNavMesh->InvalidateSector(m_LastInvalidatedBounds.GetCenter().GetAsVec2(), m_LastInvalidatedBounds.GetHalfExtents().GetAsVec2(), true, plAiNavMeshRebuildReason::Obstacle);
     }
 
-    pNavMesh->InvalidateSector(currentBounds.GetCenter().GetAsVec2(), currentBounds.GetHalfExtents().GetAsVec2(), true);
+    pNavMesh->InvalidateSector(currentBounds.GetCenter().GetAsVec2(), currentBounds.GetHalfExtents().GetAsVec2(), true, plAiNavMeshRebuildReason::Obstacle);
   }
 
   m_LastInvalidatedBounds = currentBounds;

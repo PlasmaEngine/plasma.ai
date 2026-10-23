@@ -13,10 +13,10 @@ PL_BEGIN_STATIC_REFLECTED_BITFLAGS(plAiVoxelNavigationDebugFlags, 1)
 PL_END_STATIC_REFLECTED_BITFLAGS;
 
 PL_BEGIN_STATIC_REFLECTED_ENUM(plAiVoxelNavigationComponentState, 1)
-  PL_ENUM_CONSTANTS(plAiVoxelNavigationComponentState::Idle, plAiVoxelNavigationComponentState::Moving, plAiVoxelNavigationComponentState::Failed)
+  PL_ENUM_CONSTANTS(plAiVoxelNavigationComponentState::Idle, plAiVoxelNavigationComponentState::Moving, plAiVoxelNavigationComponentState::Failed, plAiVoxelNavigationComponentState::Searching)
 PL_END_STATIC_REFLECTED_ENUM;
 
-PL_BEGIN_COMPONENT_TYPE(plAiVoxelNavigationComponent, 2, plComponentMode::Dynamic)
+PL_BEGIN_COMPONENT_TYPE(plAiVoxelNavigationComponent, 3, plComponentMode::Dynamic)
 {
   PL_BEGIN_PROPERTIES
   {
@@ -25,6 +25,7 @@ PL_BEGIN_COMPONENT_TYPE(plAiVoxelNavigationComponent, 2, plComponentMode::Dynami
     PL_MEMBER_PROPERTY("Acceleration", m_fAcceleration)->AddAttributes(new plDefaultValueAttribute(3.0f)),
     PL_MEMBER_PROPERTY("Deceleration", m_fDeceleration)->AddAttributes(new plDefaultValueAttribute(8.0f)),
     PL_MEMBER_PROPERTY("ReachedDistance", m_fReachedDistance)->AddAttributes(new plDefaultValueAttribute(1.0f), new plClampValueAttribute(0.0f, 10.0f)),
+    PL_MEMBER_PROPERTY("AgentRadius", m_fAgentRadius)->AddAttributes(new plClampValueAttribute(0.0f, 10.0f)),
     PL_MEMBER_PROPERTY("ApplySteering", m_bApplySteering)->AddAttributes(new plDefaultValueAttribute(true)),
     PL_BITFLAGS_MEMBER_PROPERTY("DebugFlags", plAiVoxelNavigationDebugFlags, m_DebugFlags),
   }
@@ -77,51 +78,109 @@ void plAiVoxelNavigationComponent::OnSimulationStarted()
 
 void plAiVoxelNavigationComponent::SetDestination(const plVec3& vGlobalPos)
 {
-  auto* pVoxelModule = GetWorld()->GetOrCreateModule<plAiVoxelWorldModule>();
-  if (pVoxelModule == nullptr || !pVoxelModule->IsReady())
+  m_vDestination = vGlobalPos;
+  m_bHasDestination = true;
+
+  // keep following the current path while the new one is computed
+  if (m_State != plAiVoxelNavigationComponentState::Moving)
   {
-    // Grid not ready yet, don't treat as failure - caller can retry
-    return;
+    m_State = plAiVoxelNavigationComponentState::Searching;
   }
+
+  StartSearch();
+}
+
+void plAiVoxelNavigationComponent::StartSearch()
+{
+  auto* pVoxelModule = GetWorld()->GetOrCreateModule<plAiVoxelWorldModule>();
+  if (!pVoxelModule->IsReady())
+    return; // the destination is kept; UpdateSearch starts once the grid is ready
 
   m_Navigation.SetVoxelGrid(pVoxelModule->GetVoxelGrid());
   m_fVoxelSize = pVoxelModule->GetVoxelGrid()->GetVoxelSize();
+  m_LastSearchStart = GetWorld()->GetClock().GetAccumulatedTime();
 
-  const plVec3 vCurrentPos = GetOwner()->GetGlobalPosition();
-  const auto result = m_Navigation.FindPath(vCurrentPos, vGlobalPos);
+  const plVec3 vFrom = GetOwner()->GetGlobalPosition();
+  const plAiVoxelNavigation::State result = m_Navigation.StartPathSearch(vFrom, m_vDestination, m_fAgentRadius);
 
+  if (result != plAiVoxelNavigation::State::Searching)
+  {
+    ReportFailure(result, vFrom);
+  }
+}
+
+void plAiVoxelNavigationComponent::UpdateSearch()
+{
+  auto* pVoxelModule = GetWorld()->GetModule<plAiVoxelWorldModule>();
+  if (pVoxelModule == nullptr || !m_bHasDestination)
+    return;
+
+  if (!m_Navigation.IsSearching())
+  {
+    if (m_State == plAiVoxelNavigationComponentState::Searching && pVoxelModule->IsReady())
+    {
+      StartSearch(); // the destination was set before the grid was ready
+    }
+    else if (m_State == plAiVoxelNavigationComponentState::Moving && pVoxelModule->IsReady() &&
+             m_Navigation.GetPathGeneration() != pVoxelModule->GetVoxelGrid()->GetGeneration() &&
+             GetWorld()->GetClock().GetAccumulatedTime() - m_LastSearchStart > plTime::MakeFromSeconds(0.25))
+    {
+      StartSearch(); // obstacles changed the grid since the path was computed
+    }
+
+    if (!m_Navigation.IsSearching())
+      return;
+  }
+
+  const plUInt32 uiBudget = pVoxelModule->TakeSearchBudget(plMath::MaxValue<plUInt32>());
+  if (uiBudget == 0)
+    return;
+
+  const plAiVoxelNavigation::State result = m_Navigation.ContinuePathSearch(uiBudget);
+
+  if (result == plAiVoxelNavigation::State::PathFound)
+  {
+    if (m_State != plAiVoxelNavigationComponentState::Moving)
+    {
+      m_vVelocity = plVec3::MakeZero();
+    }
+
+    m_State = plAiVoxelNavigationComponentState::Moving;
+  }
+  else if (result != plAiVoxelNavigation::State::Searching)
+  {
+    ReportFailure(result, GetOwner()->GetGlobalPosition());
+  }
+}
+
+void plAiVoxelNavigationComponent::ReportFailure(plAiVoxelNavigation::State result, const plVec3& vFrom)
+{
   switch (result)
   {
-    case plAiVoxelNavigation::State::PathFound:
-      m_State = plAiVoxelNavigationComponentState::Moving;
-      m_vVelocity = plVec3::MakeZero();
-      break;
-
     case plAiVoxelNavigation::State::InvalidStartPosition:
-      plLog::Warning("VoxelNavigation: Start position ({}, {}, {}) is outside the grid or inside a solid voxel.",
-        vCurrentPos.x, vCurrentPos.y, vCurrentPos.z);
-      m_State = plAiVoxelNavigationComponentState::Failed;
+      plLog::Warning("VoxelNavigation: Start position ({}, {}, {}) is outside the grid or inside a solid voxel.", vFrom.x, vFrom.y, vFrom.z);
       break;
 
     case plAiVoxelNavigation::State::InvalidTargetPosition:
-      plLog::Warning("VoxelNavigation: Target position ({}, {}, {}) is outside the grid or inside a solid voxel.",
-        vGlobalPos.x, vGlobalPos.y, vGlobalPos.z);
-      m_State = plAiVoxelNavigationComponentState::Failed;
+      plLog::Warning("VoxelNavigation: Target position ({}, {}, {}) is outside the grid or inside a solid voxel.", m_vDestination.x, m_vDestination.y, m_vDestination.z);
       break;
 
     default:
-      plLog::Warning("VoxelNavigation: No path found from ({}, {}, {}) to ({}, {}, {}).",
-        vCurrentPos.x, vCurrentPos.y, vCurrentPos.z,
-        vGlobalPos.x, vGlobalPos.y, vGlobalPos.z);
-      m_State = plAiVoxelNavigationComponentState::Failed;
+      plLog::Warning("VoxelNavigation: No path found from ({}, {}, {}) to ({}, {}, {}).", vFrom.x, vFrom.y, vFrom.z, m_vDestination.x, m_vDestination.y, m_vDestination.z);
       break;
   }
+
+  m_Navigation.CancelNavigation();
+  m_State = plAiVoxelNavigationComponentState::Failed;
+  m_bHasDestination = false;
+  m_vVelocity = plVec3::MakeZero();
 }
 
 void plAiVoxelNavigationComponent::CancelNavigation()
 {
   m_Navigation.CancelNavigation();
   m_State = plAiVoxelNavigationComponentState::Idle;
+  m_bHasDestination = false;
   m_vVelocity = plVec3::MakeZero();
 }
 
@@ -147,6 +206,7 @@ void plAiVoxelNavigationComponent::SerializeComponent(plWorldWriter& inout_strea
   s << m_bApplySteering;
   s << m_DebugFlags;
   inout_stream.WriteGameObjectHandle(m_hNavigationTarget);
+  s << m_fAgentRadius;
 }
 
 void plAiVoxelNavigationComponent::DeserializeComponent(plWorldReader& inout_stream)
@@ -165,6 +225,11 @@ void plAiVoxelNavigationComponent::DeserializeComponent(plWorldReader& inout_str
   if (uiVersion >= 2)
   {
     m_hNavigationTarget = inout_stream.ReadGameObjectHandle();
+  }
+
+  if (uiVersion >= 3)
+  {
+    s >> m_fAgentRadius;
   }
 }
 
@@ -194,11 +259,20 @@ void plAiVoxelNavigationComponent::Update()
     }
   }
 
+  UpdateSearch();
+
   const float tDiff = GetWorld()->GetClock().GetTimeDiff().AsFloatInSeconds();
 
   if (m_State == plAiVoxelNavigationComponentState::Moving)
   {
     MoveTowardsWaypoint(tDiff);
+
+    if (m_State == plAiVoxelNavigationComponentState::Idle)
+    {
+      // arrived: drop the destination and any recomputation still running for it
+      m_Navigation.CancelNavigation();
+      m_bHasDestination = false;
+    }
   }
 
   if (m_DebugFlags.IsAnyFlagSet())
@@ -217,6 +291,9 @@ void plAiVoxelNavigationComponent::Update()
           break;
         case plAiVoxelNavigationComponentState::Failed:
           plDebugRenderer::Draw3DText(GetWorld(), "Failed", vPosition, plColor::Red);
+          break;
+        case plAiVoxelNavigationComponentState::Searching:
+          plDebugRenderer::Draw3DText(GetWorld(), "Searching", vPosition, plColor::LightBlue);
           break;
       }
     }

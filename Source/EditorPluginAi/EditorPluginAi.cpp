@@ -3,9 +3,14 @@
 #include <EditorFramework/Actions/AssetActions.h>
 #include <EditorFramework/Actions/CommonAssetActions.h>
 #include <EditorFramework/Actions/ProjectActions.h>
+#include <AiPlugin/Encounter/Components/EncounterWaveComponent.h>
+#include <AiPlugin/Navigation/NavigationConfig.h>
 #include <EditorFramework/EngineShell/WindowContent.h>
 #include <EditorPluginAi/Actions/AiActions.h>
-#include <EditorPluginAi/Dialogs/AiProjectSettingsDlg.moc.h>
+#include <EditorPluginAi/Debugger/AiDebuggerPanel.h>
+#include <EditorPluginAi/Validation/AiValidation.h>
+#include <EditorUi/Widgets.h>
+#include <Foundation/Configuration/Plugin.h>
 #include <GuiFoundation/Action/ActionMapManager.h>
 #include <GuiFoundation/Action/CommandHistoryActions.h>
 #include <GuiFoundation/Action/DocumentActions.h>
@@ -17,26 +22,75 @@
 
 static void ToolsProjectEventHandler(const plToolsProjectEvent& e);
 
+/// The package's icon folder: the icons under their ids (":/AssetIcons/AiBehavior.svg" is
+/// "EditorIcons/AssetIcons/AiBehavior.svg"). The plugin binary lives in <package>/Bin/<configuration>.
+static plString s_sIconFolder;
+
+static void RegisterIconFolder()
+{
+  plStringBuilder sPlugin, sCopy;
+  plPlugin::GetPluginPaths("plEditorPluginAi", sPlugin, sCopy, 0);
+
+  plStringBuilder sFolder = sPlugin.GetFileDirectory();
+  sFolder.AppendPath("..", "..", "EditorIcons");
+  sFolder.MakeCleanPath();
+
+  s_sIconFolder = sFolder;
+  plEditorUi::AddIconFolder(s_sIconFolder);
+}
+
+static void UnregisterIconFolder()
+{
+  plEditorUi::RemoveIconFolder(s_sIconFolder);
+  s_sIconFolder.Clear();
+}
+
 // The AI editors in the engine shell: the main view gets the width; the preview and Raw Properties share the right
-// column, one above the other, as both follow the selection.
+// column, one above the other, as both follow the selection. Validation spans the bottom, below both.
 
 static void ArrangeAiArchetype(plEditorUiDockManager& ref_panels)
 {
+  ref_panels.DockPanel("AiArchetypeValidationDockWidget", "AiArchetypeAssetDockWidget", plEditorUiDockSide::Bottom, 0.3f);
   ref_panels.DockPanel("AiArchetypeInsightDockWidget", "AiArchetypeAssetDockWidget", plEditorUiDockSide::Right, 0.36f);
   ref_panels.DockPanel("AiArchetypeRawPropertyDockWidget", "AiArchetypeInsightDockWidget", plEditorUiDockSide::Bottom, 0.45f);
 }
 
 static void ArrangeAiBehavior(plEditorUiDockManager& ref_panels)
 {
+  ref_panels.DockPanel("AiBehaviorValidationDockWidget", "AiBehaviorAssetDockWidget", plEditorUiDockSide::Bottom, 0.3f);
   ref_panels.DockPanel("AiBehaviorScorePreviewDockWidget", "AiBehaviorAssetDockWidget", plEditorUiDockSide::Right, 0.36f);
   ref_panels.DockPanel("AiBehaviorRawPropertyDockWidget", "AiBehaviorScorePreviewDockWidget", plEditorUiDockSide::Bottom, 0.4f);
 }
 
 static void ArrangeAiEqsQuery(plEditorUiDockManager& ref_panels)
 {
+  ref_panels.DockPanel("AiEqsQueryValidationDockWidget", "AiEqsQueryAssetDockWidget", plEditorUiDockSide::Bottom, 0.3f);
+
   // the preview is a top-down scatter that needs room
   ref_panels.DockPanel("AiEqsQueryPreviewDockWidget", "AiEqsQueryAssetDockWidget", plEditorUiDockSide::Right, 0.45f);
   ref_panels.DockPanel("AiEqsQueryRawPropertyDockWidget", "AiEqsQueryPreviewDockWidget", plEditorUiDockSide::Bottom, 0.35f);
+}
+
+/// Shows a wave's settings only for its trigger, and the maximum hold only while it can be held.
+static void EncounterWavePropertyMetaState(plPropertyMetaStateEvent& e)
+{
+  if (e.m_pObject->GetTypeAccessor().GetType() != plGetStaticRTTI<plAiEncounterWaveComponent>())
+    return;
+
+  const plInt64 iTrigger = e.m_pObject->GetTypeAccessor().GetValue("Trigger").ConvertTo<plInt64>();
+  const bool bHolds = e.m_pObject->GetTypeAccessor().GetValue("HoldWhenIntense").ConvertTo<bool>();
+  const bool bAfterWave = iTrigger == plAiEncounterTrigger::WaveCleared || iTrigger == plAiEncounterTrigger::WaveDown;
+
+  auto& props = *e.m_pPropertyStates;
+  auto Show = [&](const char* szProperty, bool bVisible)
+  { props[szProperty].m_Visibility = bVisible ? plPropertyUiState::Default : plPropertyUiState::Invisible; };
+
+  Show("AfterWave", bAfterWave);
+  Show("AliveAtMost", iTrigger == plAiEncounterTrigger::WaveDown);
+  Show("Time", iTrigger == plAiEncounterTrigger::Time);
+  Show("CalmBelow", iTrigger == plAiEncounterTrigger::Calm);
+  Show("CalmFor", iTrigger == plAiEncounterTrigger::Calm);
+  Show("MaxHold", bHolds);
 }
 
 static void RegisterAiAssetActionMaps(const char* szAssetName)
@@ -69,6 +123,8 @@ static void RegisterAiAssetActionMaps(const char* szAssetName)
 
 void OnLoadPlugin()
 {
+  RegisterIconFolder();
+
   plToolsProject::GetSingleton()->s_Events.AddEventHandler(ToolsProjectEventHandler);
 
   plAiActions::RegisterActions();
@@ -80,19 +136,30 @@ void OnLoadPlugin()
   // after the asset menu bars exist, which also get the Ai Project Settings entry
   plAiActions::MapMenuActions();
 
-  plQtWindowContentProvider::SetDefaultArrangement("AiArchetype", &ArrangeAiArchetype);
-  plQtWindowContentProvider::SetDefaultArrangement("AiBehavior", &ArrangeAiBehavior);
-  plQtWindowContentProvider::SetDefaultArrangement("AiEqsQuery", &ArrangeAiEqsQuery);
+  plWindowContentProvider::SetDefaultArrangement("AiArchetype", &ArrangeAiArchetype);
+  plWindowContentProvider::SetDefaultArrangement("AiBehavior", &ArrangeAiBehavior);
+  plWindowContentProvider::SetDefaultArrangement("AiEqsQuery", &ArrangeAiEqsQuery);
+
+  plAiDebuggerPanel::Startup();
+
+  plPropertyMetaState::GetSingleton()->m_Events.AddEventHandler(EncounterWavePropertyMetaState);
 }
 
 void OnUnloadPlugin()
 {
-  plQtWindowContentProvider::SetDefaultArrangement("AiArchetype", nullptr);
-  plQtWindowContentProvider::SetDefaultArrangement("AiBehavior", nullptr);
-  plQtWindowContentProvider::SetDefaultArrangement("AiEqsQuery", nullptr);
+  plPropertyMetaState::GetSingleton()->m_Events.RemoveEventHandler(EncounterWavePropertyMetaState);
 
+  plAiDebuggerPanel::Shutdown();
+
+  plWindowContentProvider::SetDefaultArrangement("AiArchetype", nullptr);
+  plWindowContentProvider::SetDefaultArrangement("AiBehavior", nullptr);
+  plWindowContentProvider::SetDefaultArrangement("AiEqsQuery", nullptr);
+
+  plAiValidation::ClearCache();
   plAiActions::UnregisterActions();
   plToolsProject::GetSingleton()->s_Events.RemoveEventHandler(ToolsProjectEventHandler);
+
+  UnregisterIconFolder();
 }
 
 PL_PLUGIN_ON_LOADED()

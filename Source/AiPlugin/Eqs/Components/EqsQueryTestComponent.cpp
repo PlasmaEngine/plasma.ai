@@ -217,6 +217,10 @@ void plAiEqsQueryTestComponent::DrawResult()
   {
     plDebugRenderer::Draw3DText(GetWorld(), "EQS: area not ready", GetOwner()->GetGlobalPosition() + plVec3(0, 0, 1.0f), plColor::Yellow);
   }
+  else if (m_LastResult.m_Status == plAiEqsQueryResult::Status::TimedOut)
+  {
+    plDebugRenderer::Draw3DText(GetWorld(), "EQS: timed out (see AI.EQS.MaxQueryAge)", GetOwner()->GetGlobalPosition() + plVec3(0, 0, 1.0f), plColor::OrangeRed);
+  }
 }
 
 PL_STATICLINK_FILE(AiPlugin, AiPlugin_Eqs_Components_EqsQueryTestComponent);

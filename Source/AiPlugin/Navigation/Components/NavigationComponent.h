@@ -169,6 +169,10 @@ protected:
   plAiCrowdWorldModule* m_pCrowdModule = nullptr;
   plAiCrowdWorldModule::AgentID m_CrowdAgentID = plAiCrowdWorldModule::InvalidAgentID;
   plVec3 m_vCrowdVelocity = plVec3::MakeZero(); ///< Avoidance velocity, approaches the solved velocity within the acceleration limits.
+  bool m_bCrowdSteered = false;                 ///< this frame's movement follows m_vCrowdVelocity (a crowd solve was applied)
+
+  /// While not moving, the agent is an obstacle the crowd steers around.
+  void SubmitIdleToCrowd(const plTransform& transform);
 
   // nav link traversal state
   plVec3 m_vLinkStart = plVec3::MakeZero();

@@ -1,0 +1,6 @@
+<!-- AI encounter director: a pacing curve with a hold line above it -->
+<svg width="800px" height="800px" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 3v18h18"/>
+  <path d="M6 17c2.5 0 3-9 6-9s3 6 5 6 2-3 3-3"/>
+  <path d="M7 5h13" stroke-dasharray="0.5 3.5"/>
+</svg>

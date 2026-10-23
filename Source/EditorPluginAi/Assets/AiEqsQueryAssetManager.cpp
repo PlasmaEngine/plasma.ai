@@ -2,8 +2,7 @@
 
 #include <EditorPluginAi/Assets/AiEqsQueryAsset.h>
 #include <EditorPluginAi/Assets/AiEqsQueryAssetManager.h>
-#include <EditorPluginAi/Assets/AiEqsQueryAssetWindow.moc.h>
-#include <GuiFoundation/UIServices/ImageCache.moc.h>
+#include <EditorPluginAi/Assets/AiEqsQueryAssetWindow.h>
 
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsQueryAssetDocumentManager, 1, plRTTIDefaultAllocator<plAiEqsQueryAssetDocumentManager>)
 PL_END_DYNAMIC_REFLECTED_TYPE;
@@ -22,8 +21,6 @@ plAiEqsQueryAssetDocumentManager::plAiEqsQueryAssetDocumentManager()
 
   m_DocTypeDesc.m_sResourceFileExtension = "plAiEqsQuery";
   m_DocTypeDesc.m_AssetDocumentFlags = plAssetDocumentFlags::AutoTransformOnSave;
-
-  plQtImageCache::GetSingleton()->RegisterTypeImage("AiEqsQuery", QPixmap(":/AssetIcons/AiEqsQuery.svg"));
 }
 
 plAiEqsQueryAssetDocumentManager::~plAiEqsQueryAssetDocumentManager()
@@ -39,7 +36,7 @@ void plAiEqsQueryAssetDocumentManager::OnDocumentManagerEvent(const plDocumentMa
     {
       if (e.m_pDocument->GetDynamicRTTI() == plGetStaticRTTI<plAiEqsQueryAssetDocument>())
       {
-        new plQtAiEqsQueryAssetDocumentWindow(e.m_pDocument); // NOLINT: not a memory leak
+        new plAiEqsQueryAssetDocumentWindow(e.m_pDocument); // NOLINT: not a memory leak
       }
     }
     break;

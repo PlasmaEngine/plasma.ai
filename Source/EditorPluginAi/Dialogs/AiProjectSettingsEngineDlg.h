@@ -2,12 +2,12 @@
 
 #include <AiPlugin/Navigation/NavigationConfig.h>
 #include <EditorPluginAi/EditorPluginAiDLL.h>
+#include <EditorUi/Runtime.h>
 #include <EditorUi/Tabs.h>
 #include <EditorUi/Tree.h>
 #include <Foundation/Containers/Map.h>
+#include <Foundation/Strings/StringBuilder.h>
 #include <GuiFoundation/EngineUi/EngineDialog.h>
-
-#include <QString>
 
 struct plEditorUiMenu;
 
@@ -16,20 +16,24 @@ namespace plAiProjectSettings
   /// The message for a new config name, or an empty string when it can be used: the trimmed name must not be empty and
   /// must differ from every config's name. szKind is "Navmesh" or "Path Search".
   template <typename CONFIG>
-  QString ValidateConfigName(const QString& sName, const plDynamicArray<CONFIG>& configs, const char* szKind)
+  plString ValidateConfigName(plStringView sName, const plDynamicArray<CONFIG>& configs, const char* szKind)
   {
-    const QString sTrimmed = sName.trimmed();
-    if (sTrimmed.isEmpty())
-      return QStringLiteral("The name can't be empty.");
+    plStringBuilder sTrimmed = sName;
+    sTrimmed.Trim(" \t\r\n");
+    if (sTrimmed.IsEmpty())
+      return "The name can't be empty.";
 
-    const plString sUtf8 = sTrimmed.toUtf8().constData();
     for (const CONFIG& config : configs)
     {
-      if (config.m_sName == sUtf8)
-        return QString("A %1 Config with this name already exists.").arg(szKind);
+      if (config.m_sName == sTrimmed)
+      {
+        plStringBuilder sMessage;
+        sMessage.SetFormat("A {} Config with this name already exists.", szKind);
+        return sMessage;
+      }
     }
 
-    return QString();
+    return plString();
   }
 } // namespace plAiProjectSettings
 
@@ -44,7 +48,7 @@ namespace plAiProjectSettings
 /// value, the validation line names the field and OK stays disabled. Switching tab or config shows the stored values
 /// again. Enter presses OK, also in the ground type list, unless a rename is open. Reset reloads the saved file; OK
 /// saves it and refreshes the AiGroundType, AiPathSearchConfig and AiNavmeshConfig enums.
-class plQtAiProjectSettingsEngineDlg : public plQtEngineDialog
+class plAiProjectSettingsEngineDlg : public plEngineDialog
 {
 public:
   enum class Tab : plUInt8
@@ -56,11 +60,14 @@ public:
     Squads,
   };
 
-  plQtAiProjectSettingsEngineDlg(QWidget* pParent);
-  ~plQtAiProjectSettingsEngineDlg();
+  plAiProjectSettingsEngineDlg();
+  ~plAiProjectSettingsEngineDlg();
 
-  /// Opens the engine dialog, or the Qt one when engine dialogs are off. True when OK saved the settings.
-  static bool Open(QWidget* pParent);
+  /// Opens the dialog; false without a UI renderer. True when OK saved the settings.
+  static bool Open();
+
+  /// Writes a default RuntimeConfigs/AiPluginConfig.cfg when the project has none.
+  static void EnsureConfigFileExists();
 
 protected:
   void BuildBody(plUiElement* pBody, const plVec2& vSize) override;
@@ -181,4 +188,5 @@ private:
   plEventSubscriptionID m_PointerSubscription = 0;
   plEventSubscriptionID m_KeySubscription = 0;
   plEventSubscriptionID m_TabSubscription = 0;
+  plEditorUiTimerGroup m_Timers; ///< prompts and questions deferred out of the UI dispatch
 };

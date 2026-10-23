@@ -99,6 +99,7 @@ bool plAiEqsTestDesc::ProcessItem(const plAiEqsTest& test, plAiEqsItem& item, pl
   trace.m_bEvaluated = true;
   trace.m_Data = item.m_TestData;
   trace.m_fMeasurement = item.m_bHasMeasurement ? item.m_fMeasurement : item.m_fRaw;
+  trace.m_bHasMeasurement = item.m_bHasMeasurement;
   trace.m_fRaw = item.m_fRaw;
   const bool valid = item.m_TestData == plAiEqsTestData::Valid;
   const bool legacy = test.m_MissingDataPolicy == plAiEqsMissingDataPolicy::Legacy && !nonFinite;

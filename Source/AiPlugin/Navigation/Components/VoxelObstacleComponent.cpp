@@ -74,23 +74,20 @@ void plAiVoxelObstacleComponent::InjectIntoGrid()
   if (!bounds.IsValid())
     return;
 
-  const plBoundingBox box = bounds.GetBox();
-  pVoxelModule->InjectObstacle(box);
-  m_LastInjectedBounds = box;
-  m_bInjected = true;
+  m_ObstacleID = pVoxelModule->AddObstacle(bounds.GetBox());
 }
 
 void plAiVoxelObstacleComponent::RemoveFromGrid()
 {
-  if (!m_bInjected)
+  if (m_ObstacleID == plAiVoxelWorldModule::InvalidObstacleID)
     return;
 
-  auto* pVoxelModule = GetWorld()->GetModule<plAiVoxelWorldModule>();
-  if (pVoxelModule == nullptr)
-    return;
+  if (auto* pVoxelModule = GetWorld()->GetModule<plAiVoxelWorldModule>())
+  {
+    pVoxelModule->RemoveObstacle(m_ObstacleID);
+  }
 
-  pVoxelModule->RemoveObstacle(m_LastInjectedBounds);
-  m_bInjected = false;
+  m_ObstacleID = plAiVoxelWorldModule::InvalidObstacleID;
 }
 
 void plAiVoxelObstacleComponent::SerializeComponent(plWorldWriter& inout_stream) const

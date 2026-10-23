@@ -124,10 +124,27 @@ plAiSquadWorldModule::MemberID plAiSquadWorldModule::RegisterMember(const plHash
   member.m_hComponent = hAgentComponent;
   member.m_uiSquadIndex = uiSquad;
   member.m_bInUse = true;
-  member.m_uiBoundGroup = static_cast<plUInt8>(squad.m_Members.GetCount() & 1); // alternate A/B on join
+  // join the smaller bounding group: after members left, alternating by count would unbalance them
+  plUInt32 uiInGroupB = 0;
+  for (MemberID other : squad.m_Members)
+  {
+    uiInGroupB += m_Members[other].m_uiBoundGroup;
+  }
+
+  member.m_uiBoundGroup = (uiInGroupB * 2 < squad.m_Members.GetCount()) ? 1 : 0;
 
   squad.m_Members.PushBack(id);
-  squad.m_uiPeakSize = plMath::Max<plUInt8>(squad.m_uiPeakSize, static_cast<plUInt8>(squad.m_Members.GetCount()));
+
+  if (squad.m_uiLosses > 0)
+  {
+    // reinforced: the squad as it is now is the new full strength
+    squad.m_uiLosses = 0;
+    squad.m_uiPeakSize = static_cast<plUInt16>(squad.m_Members.GetCount());
+  }
+  else
+  {
+    squad.m_uiPeakSize = plMath::Max<plUInt16>(squad.m_uiPeakSize, static_cast<plUInt16>(squad.m_Members.GetCount()));
+  }
 
   return id;
 }
@@ -144,7 +161,7 @@ void plAiSquadWorldModule::UnregisterMember(MemberID id)
     Squad& squad = m_Squads[member.m_uiSquadIndex];
     squad.m_Members.RemoveAndCopy(id);
 
-    // deliberate removal counts as a loss too - indistinguishable from death from the squad's view
+    // a deactivated member counts as lost too (the world can't tell it from a death); if it comes back, it reinforces
     ++squad.m_uiLosses;
 
     if (squad.m_Members.IsEmpty())
@@ -158,6 +175,26 @@ void plAiSquadWorldModule::UnregisterMember(MemberID id)
   member.m_bInUse = false;
   member.m_hComponent.Invalidate();
   m_FreeMembers.PushBack(id);
+}
+
+plUInt32 plAiSquadWorldModule::GetSquadSize(const plTempHashedString& sSquadId) const
+{
+  plUInt32 uiSquad = plInvalidIndex;
+  if (!m_SquadByName.TryGetValue(sSquadId, uiSquad))
+    return 0;
+
+  const plWorld* pWorld = GetWorld();
+  plUInt32 uiActive = 0;
+
+  // members deleted since the last squad tick are still listed until the next sweep
+  for (MemberID id : m_Squads[uiSquad].m_Members)
+  {
+    const plComponent* pComponent = nullptr;
+    if (pWorld->TryGetComponent(m_Members[id].m_hComponent, pComponent) && pComponent->IsActiveAndSimulating())
+      ++uiActive;
+  }
+
+  return uiActive;
 }
 
 void plAiSquadWorldModule::UpdateSquads(const UpdateContext& ctxt)
@@ -368,6 +405,11 @@ void plAiSquadWorldModule::ShareTargets(Squad& squad, plTime now)
   stimulus.m_hSource = squad.m_hSharedTarget;
   stimulus.m_sSourceTeam = sSourceTeam;
 
+  // broadcast around the squad, but members remember where the target was reported
+  stimulus.m_vEventPosition = squad.m_vSharedTargetPos;
+  stimulus.m_bHasEventPosition = true;
+  stimulus.m_bReport = true;
+
   m_pPerception->PostStimulus(stimulus);
   ++m_uiStatSharesPosted;
 }
@@ -379,8 +421,17 @@ void plAiSquadWorldModule::EvaluateIntent(Squad& squad, plTime now)
 
   plAiSquadIntent::Enum newIntent = static_cast<plAiSquadIntent::Enum>(squad.m_Intent.GetValue());
 
+  const plTime retreatHold = plTime::Seconds(plMath::Max(0.0f, cvar_SquadRetreatHoldTime.GetValue()));
+
+  // a retreat that has held long enough is over: the survivors are the squad now, only new losses retreat again
+  if (squad.m_Intent == plAiSquadIntent::Retreat && (now - squad.m_IntentSince) >= retreatHold && squad.m_uiLosses > 0)
+  {
+    squad.m_uiLosses = 0;
+    squad.m_uiPeakSize = static_cast<plUInt16>(squad.m_Members.GetCount());
+  }
+
   // retreat escalates immediately and holds for a while
-  const plUInt8 uiRetreatLosses = static_cast<plUInt8>(plMath::Ceil(plMath::Clamp(cvar_SquadRetreatLossFraction.GetValue(), 0.05f, 1.0f) * squad.m_uiPeakSize));
+  const plUInt16 uiRetreatLosses = static_cast<plUInt16>(plMath::Ceil(plMath::Clamp(cvar_SquadRetreatLossFraction.GetValue(), 0.05f, 1.0f) * squad.m_uiPeakSize));
 
   if (squad.m_uiLosses >= uiRetreatLosses && squad.m_uiPeakSize >= 2)
   {
@@ -393,7 +444,7 @@ void plAiSquadWorldModule::EvaluateIntent(Squad& squad, plTime now)
     return;
   }
 
-  if (squad.m_Intent == plAiSquadIntent::Retreat && (now - squad.m_IntentSince) < plTime::Seconds(plMath::Max(0.0f, cvar_SquadRetreatHoldTime.GetValue())))
+  if (squad.m_Intent == plAiSquadIntent::Retreat && (now - squad.m_IntentSince) < retreatHold)
     return;
 
   if (!bDwellElapsed)
@@ -534,6 +585,18 @@ void plAiSquadWorldModule::AssignMoveTokensAndPositions(Squad& squad, plTime now
 {
   if (squad.m_Intent == plAiSquadIntent::Retreat)
   {
+    for (MemberID id : squad.m_Members)
+    {
+      m_Members[id].m_bMoveToken = true;
+    }
+
+    // the rally point is chosen once per retreat: computed from the moving centroid every tick, it would move with the
+    // squad and the retreat would never arrive
+    if (squad.m_RallyChosenFor == squad.m_IntentSince)
+      return;
+
+    squad.m_RallyChosenFor = squad.m_IntentSince;
+
     // everyone falls back to the rally point; push it away from the threat when home lies toward it
     plVec3 vRally = squad.m_vHome;
 
@@ -555,11 +618,6 @@ void plAiSquadWorldModule::AssignMoveTokensAndPositions(Squad& squad, plTime now
       {
         vRally = vCentroid + vAway * cvar_SquadRetreatDistance.GetValue();
       }
-    }
-
-    for (MemberID id : squad.m_Members)
-    {
-      m_Members[id].m_bMoveToken = true;
     }
 
     squad.m_vSharedMovePos = vRally;

@@ -30,6 +30,9 @@ PL_END_DYNAMIC_REFLECTED_TYPE;
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiInput_TimeSinceDeactivation, 1, plRTTIDefaultAllocator<plAiInput_TimeSinceDeactivation>)
 PL_END_DYNAMIC_REFLECTED_TYPE;
 
+PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiInput_AlertLevel, 1, plRTTIDefaultAllocator<plAiInput_AlertLevel>)
+PL_END_DYNAMIC_REFLECTED_TYPE;
+
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiInput_Constant, 1, plRTTIDefaultAllocator<plAiInput_Constant>)
 {
   PL_BEGIN_PROPERTIES
@@ -199,6 +202,11 @@ float plAiInput_TimeSinceActivation::Evaluate(const plAiScoringContext& context)
 float plAiInput_TimeSinceDeactivation::Evaluate(const plAiScoringContext& context) const
 {
   return static_cast<float>(context.m_TimeSinceDeactivation.GetSeconds());
+}
+
+float plAiInput_AlertLevel::Evaluate(const plAiScoringContext& context) const
+{
+  return static_cast<float>(context.m_uiAlertLevel);
 }
 
 float plAiInput_Constant::Evaluate(const plAiScoringContext& context) const

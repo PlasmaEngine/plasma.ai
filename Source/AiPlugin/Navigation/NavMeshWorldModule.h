@@ -79,6 +79,8 @@ public:
   /// \name Nav links (off-mesh connections: jumps, ladders, doors)
   ///@{
 
+  /// The low 20 bits index the registry, the bits above count how often that entry was reused. Tiles baked before a link
+  /// was removed still carry its old ID; that ID resolves to nothing instead of to the link that took over the entry.
   using NavLinkID = plUInt32;
   static constexpr NavLinkID InvalidNavLinkID = plInvalidIndex;
 
@@ -89,6 +91,10 @@ public:
 
   /// \brief Resolves the authoring component of a baked off-mesh connection (via its user ID).
   plComponentHandle ResolveNavLink(plUInt32 uiUserID) const;
+
+  /// \brief Whether the link of a baked off-mesh connection still exists. A tile baked before the link was removed keeps
+  /// the connection until it rebuilds.
+  bool HasNavLink(plUInt32 uiUserID) const { return FindNavLink(uiUserID) != nullptr; }
 
   /// \brief The link type stored for the given user ID (Jump if unknown).
   plEnum<plAiNavLinkType> GetNavLinkType(plUInt32 uiUserID) const;
@@ -150,11 +156,15 @@ private:
   {
     plAiNavLinkData m_Data;
     plComponentHandle m_hComponent;
+    plUInt16 m_uiGeneration = 0; ///< counts the reuses of this entry; part of its NavLinkID
     bool m_bInUse = false;
   };
 
+  /// The registry entry of an ID, or nullptr when the ID is stale or unknown.
+  const NavLink* FindNavLink(NavLinkID id) const;
+
   plDeque<NavLink> m_NavLinks;
-  plDynamicArray<NavLinkID> m_FreeNavLinks;
+  plDynamicArray<plUInt32> m_FreeNavLinks; ///< free registry indices
 
   struct ObstacleCarve
   {

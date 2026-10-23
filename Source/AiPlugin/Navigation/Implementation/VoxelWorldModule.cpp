@@ -9,6 +9,8 @@
 #include <RendererCore/Debug/DebugRendererContext.h>
 
 plCVarBool cvar_VoxelGridVisualize("AI.VoxelGrid.Visualize", false, plCVarFlags::None, "Visualize the voxel grid.");
+plCVarInt cvar_VoxelNavMaxNodesPerFrame("AI.VoxelNav.MaxNodesPerFrame", 20000, plCVarFlags::Default, "A* node expansions per frame, shared by all voxel path searches.");
+plCVarInt cvar_VoxelNavMaxNodesPerSearch("AI.VoxelNav.MaxNodesPerSearch", 4000, plCVarFlags::Default, "A* node expansions one voxel path search may use per frame.");
 
 // clang-format off
 PL_IMPLEMENT_WORLD_MODULE(plAiVoxelWorldModule);
@@ -45,6 +47,9 @@ void plAiVoxelWorldModule::Deinitialize()
 
 void plAiVoxelWorldModule::Update(const UpdateContext& ctxt)
 {
+  // the next frame's searches run before this PostTransform update
+  m_iSearchBudget = plMath::Max(1, cvar_VoxelNavMaxNodesPerFrame.GetValue());
+
   if (m_uiUpdateDelay > 0)
   {
     --m_uiUpdateDelay;
@@ -53,26 +58,7 @@ void plAiVoxelWorldModule::Update(const UpdateContext& ctxt)
 
   if (m_bNeedsVoxelization)
   {
-    m_bNeedsVoxelization = false;
-
-    // Read settings from the settings component if one exists in the scene
-    if (auto* pSettingsManager = GetWorld()->GetComponentManager<plAiVoxelGridSettingsComponentManager>())
-    {
-      if (auto* pSettings = pSettingsManager->GetSingletonComponent())
-      {
-        m_uiResolutionX = pSettings->GetResolutionX();
-        m_uiResolutionY = pSettings->GetResolutionY();
-        m_uiResolutionZ = pSettings->GetResolutionZ();
-        m_fVoxelSize = pSettings->GetVoxelSize();
-        m_uiCollisionLayer = pSettings->GetCollisionLayer();
-        m_vGridCenter = pSettings->GetOwner()->GetGlobalPosition();
-      }
-    }
-
-    m_VoxelGrid.Init(m_uiResolutionX, m_uiResolutionY, m_uiResolutionZ);
-    m_VoxelGrid.SetWorldParameters(m_vGridCenter, m_fVoxelSize);
-    VoxelizeWorld(m_uiCollisionLayer);
-    m_bIsReady = true;
+    BuildGrid();
   }
 
   if (cvar_VoxelGridVisualize)
@@ -81,24 +67,81 @@ void plAiVoxelWorldModule::Update(const UpdateContext& ctxt)
   }
 }
 
-void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
+void plAiVoxelWorldModule::BuildGrid()
+{
+  // Read settings from the settings component if one exists in the scene
+  if (auto* pSettingsManager = GetWorld()->GetComponentManager<plAiVoxelGridSettingsComponentManager>())
+  {
+    if (auto* pSettings = pSettingsManager->GetSingletonComponent())
+    {
+      m_uiResolutionX = pSettings->GetResolutionX();
+      m_uiResolutionY = pSettings->GetResolutionY();
+      m_uiResolutionZ = pSettings->GetResolutionZ();
+      m_fVoxelSize = pSettings->GetVoxelSize();
+      m_uiCollisionLayer = pSettings->GetCollisionLayer();
+      m_vGridCenter = pSettings->GetOwner()->GetGlobalPosition();
+    }
+  }
+
+  m_StaticGrid.Init(m_uiResolutionX, m_uiResolutionY, m_uiResolutionZ);
+  m_StaticGrid.SetWorldParameters(m_vGridCenter, m_fVoxelSize);
+
+  if (!VoxelizeWorld(m_uiCollisionLayer))
+  {
+    // without physics there is nothing to voxelize; retry later instead of reporting an empty grid as ready
+    m_uiUpdateDelay = 60;
+    return;
+  }
+
+  m_bNeedsVoxelization = false;
+
+  // the combined grid starts as the static one; obstacles registered so far are applied on top
+  const plUInt32 uiGeneration = m_VoxelGrid.GetGeneration();
+  m_VoxelGrid = m_StaticGrid;
+  m_ObstacleCounts.Clear();
+
+  for (const Obstacle& obstacle : m_Obstacles)
+  {
+    if (obstacle.m_bInUse)
+    {
+      ApplyObstacle(obstacle.m_Box, true);
+    }
+  }
+
+  m_VoxelGrid.BuildClearance();
+
+  while (m_VoxelGrid.GetGeneration() <= uiGeneration)
+  {
+    m_VoxelGrid.IncrementGeneration();
+  }
+
+  m_bIsReady = true;
+}
+
+bool plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
 {
   auto* pPhysics = GetWorld()->GetModule<plPhysicsWorldModuleInterface>();
   if (pPhysics == nullptr)
   {
-    plLog::Warning("plAiVoxelWorldModule: No physics module available for voxelization.");
-    return;
+    if (!m_bWarnedNoPhysics)
+    {
+      plLog::Warning("plAiVoxelWorldModule: No physics module available for voxelization; voxel navigation waits for one.");
+      m_bWarnedNoPhysics = true;
+    }
+
+    return false;
   }
 
-  m_VoxelGrid.ClearData();
+  m_StaticGrid.ClearData();
 
-  const plPhysicsQueryParameters queryParams(uiCollisionLayer, plPhysicsShapeType::Static | plPhysicsShapeType::Dynamic);
-  const float fVoxelSize = m_VoxelGrid.GetVoxelSize();
-  const plBoundingBox gridAABB = m_VoxelGrid.GetAABB();
+  // static geometry only: anything that moves has to be registered as an obstacle (plAiVoxelObstacleComponent)
+  const plPhysicsQueryParameters queryParams(uiCollisionLayer, plPhysicsShapeType::Static);
+  const float fVoxelSize = m_StaticGrid.GetVoxelSize();
+  const plBoundingBox gridAABB = m_StaticGrid.GetAABB();
 
-  const plUInt32 uiDimX = m_VoxelGrid.GetDimX();
-  const plUInt32 uiDimY = m_VoxelGrid.GetDimY();
-  const plUInt32 uiDimZ = m_VoxelGrid.GetDimZ();
+  const plUInt32 uiDimX = m_StaticGrid.GetDimX();
+  const plUInt32 uiDimY = m_StaticGrid.GetDimY();
+  const plUInt32 uiDimZ = m_StaticGrid.GetDimZ();
 
   // The whole grid can be > 1M voxels; doing the physics queries serially on the main thread freezes
   // startup for many seconds. Both phases are read-only against the physics system (no simulation step
@@ -132,8 +175,8 @@ void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
           for (const auto& hit : hitResults.m_Results)
           {
             plVec3I32 vCoord;
-            if (m_VoxelGrid.WorldToCoord(hit.m_vPosition, vCoord))
-              m_VoxelGrid.SetVoxelThreadSafe(vCoord);
+            if (m_StaticGrid.WorldToCoord(hit.m_vPosition, vCoord))
+              m_StaticGrid.SetVoxelThreadSafe(vCoord);
           }
         }
       }
@@ -159,8 +202,8 @@ void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
           for (const auto& hit : hitResults.m_Results)
           {
             plVec3I32 vCoord;
-            if (m_VoxelGrid.WorldToCoord(hit.m_vPosition, vCoord))
-              m_VoxelGrid.SetVoxelThreadSafe(vCoord);
+            if (m_StaticGrid.WorldToCoord(hit.m_vPosition, vCoord))
+              m_StaticGrid.SetVoxelThreadSafe(vCoord);
           }
         }
       }
@@ -186,8 +229,8 @@ void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
           for (const auto& hit : hitResults.m_Results)
           {
             plVec3I32 vCoord;
-            if (m_VoxelGrid.WorldToCoord(hit.m_vPosition, vCoord))
-              m_VoxelGrid.SetVoxelThreadSafe(vCoord);
+            if (m_StaticGrid.WorldToCoord(hit.m_vPosition, vCoord))
+              m_StaticGrid.SetVoxelThreadSafe(vCoord);
           }
         }
       }
@@ -229,7 +272,7 @@ void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
         const plUInt32 bz = b / (uiBlocksX * uiBlocksY);
 
         // Coarse rejection: block center is the center-of-first-voxel offset by 1.5 voxels per axis.
-        const plVec3 vBlockCenter = m_VoxelGrid.CoordToWorld(plVec3I32((plInt32)bx * 4, (plInt32)by * 4, (plInt32)bz * 4)) + plVec3(1.5f * fVoxelSize);
+        const plVec3 vBlockCenter = m_StaticGrid.CoordToWorld(plVec3I32((plInt32)bx * 4, (plInt32)by * 4, (plInt32)bz * 4)) + plVec3(1.5f * fVoxelSize);
         if (!pPhysics->OverlapTestBox(vCoarseExtents, vBlockCenter, xformIdentity, queryParams))
           continue;
 
@@ -242,16 +285,16 @@ void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
               const plVec3I32 vCoord((plInt32)(bx * 4u + dx), (plInt32)(by * 4u + dy), (plInt32)(bz * 4u + dz));
 
               // Skip already-marked voxels from raycast phase
-              if (m_VoxelGrid.CheckVoxel(vCoord))
+              if (m_StaticGrid.CheckVoxel(vCoord))
                 continue;
 
-              const plVec3 vWorldPos = m_VoxelGrid.CoordToWorld(vCoord);
+              const plVec3 vWorldPos = m_StaticGrid.CoordToWorld(vCoord);
 
               plTransform xform = plTransform::MakeIdentity();
               xform.m_vPosition = vWorldPos;
 
               if (pPhysics->OverlapTestBox(vBoxExtents, vWorldPos, xform, queryParams))
-                m_VoxelGrid.SetVoxel(vCoord, true);
+                m_StaticGrid.SetVoxel(vCoord, true);
             }
           }
         }
@@ -260,21 +303,142 @@ void plAiVoxelWorldModule::VoxelizeWorld(plUInt32 uiCollisionLayer)
       "VoxelizeOverlap");
   }
 
-  const plBoundingBox finalAABB = m_VoxelGrid.GetAABB();
+  const plBoundingBox finalAABB = m_StaticGrid.GetAABB();
   plLog::Info("plAiVoxelWorldModule: Voxelized world ({}x{}x{}, voxel size {}). Grid bounds: ({}, {}, {}) to ({}, {}, {}).",
-    uiDimX, uiDimY, uiDimZ, m_VoxelGrid.GetVoxelSize(),
+    uiDimX, uiDimY, uiDimZ, m_StaticGrid.GetVoxelSize(),
     finalAABB.m_vMin.x, finalAABB.m_vMin.y, finalAABB.m_vMin.z,
     finalAABB.m_vMax.x, finalAABB.m_vMax.y, finalAABB.m_vMax.z);
+
+  return true;
+}
+
+plAiVoxelWorldModule::ObstacleID plAiVoxelWorldModule::AddObstacle(const plBoundingBox& box)
+{
+  ObstacleID id = m_Obstacles.GetCount();
+
+  if (!m_FreeObstacles.IsEmpty())
+  {
+    id = m_FreeObstacles.PeekBack();
+    m_FreeObstacles.PopBack();
+  }
+  else
+  {
+    m_Obstacles.ExpandAndGetRef();
+  }
+
+  m_Obstacles[id].m_Box = box;
+  m_Obstacles[id].m_bInUse = true;
+
+  if (m_bIsReady)
+  {
+    ApplyObstacle(box, true);
+    m_VoxelGrid.UpdateClearance(box);
+    m_VoxelGrid.IncrementGeneration();
+  }
+
+  return id;
+}
+
+void plAiVoxelWorldModule::MoveObstacle(ObstacleID id, const plBoundingBox& box)
+{
+  if (id >= m_Obstacles.GetCount() || !m_Obstacles[id].m_bInUse)
+    return;
+
+  const plBoundingBox oldBox = m_Obstacles[id].m_Box;
+  m_Obstacles[id].m_Box = box;
+
+  if (m_bIsReady)
+  {
+    ApplyObstacle(oldBox, false);
+    ApplyObstacle(box, true);
+
+    plBoundingBox changed = oldBox;
+    changed.ExpandToInclude(box);
+    m_VoxelGrid.UpdateClearance(changed);
+    m_VoxelGrid.IncrementGeneration();
+  }
+}
+
+void plAiVoxelWorldModule::RemoveObstacle(ObstacleID id)
+{
+  if (id >= m_Obstacles.GetCount() || !m_Obstacles[id].m_bInUse)
+    return;
+
+  m_Obstacles[id].m_bInUse = false;
+  m_FreeObstacles.PushBack(id);
+
+  if (m_bIsReady)
+  {
+    ApplyObstacle(m_Obstacles[id].m_Box, false);
+    m_VoxelGrid.UpdateClearance(m_Obstacles[id].m_Box);
+    m_VoxelGrid.IncrementGeneration();
+  }
 }
 
 void plAiVoxelWorldModule::InjectObstacle(const plBoundingBox& box)
 {
-  m_VoxelGrid.InjectBox(box);
+  AddObstacle(box);
 }
 
 void plAiVoxelWorldModule::RemoveObstacle(const plBoundingBox& box)
 {
-  m_VoxelGrid.SubtractBox(box);
+  for (ObstacleID id = 0; id < m_Obstacles.GetCount(); ++id)
+  {
+    if (m_Obstacles[id].m_bInUse && m_Obstacles[id].m_Box == box)
+    {
+      RemoveObstacle(id);
+      return;
+    }
+  }
+}
+
+void plAiVoxelWorldModule::ApplyObstacle(const plBoundingBox& box, bool bAdd)
+{
+  plVec3I32 vMin, vMax;
+  if (!m_VoxelGrid.GetCoordRange(box, vMin, vMax))
+    return;
+
+  for (plInt32 z = vMin.z; z <= vMax.z; ++z)
+  {
+    for (plInt32 y = vMin.y; y <= vMax.y; ++y)
+    {
+      for (plInt32 x = vMin.x; x <= vMax.x; ++x)
+      {
+        const plVec3I32 vCoord(x, y, z);
+        const plUInt32 uiIndex = (static_cast<plUInt32>(z) * m_VoxelGrid.GetDimY() + static_cast<plUInt32>(y)) * m_VoxelGrid.GetDimX() + static_cast<plUInt32>(x);
+
+        if (bAdd)
+        {
+          if (++m_ObstacleCounts[uiIndex] == 1)
+          {
+            m_VoxelGrid.SetVoxel(vCoord, true);
+          }
+
+          continue;
+        }
+
+        plUInt16* pCount = nullptr;
+        if (!m_ObstacleCounts.TryGetValue(uiIndex, pCount))
+          continue;
+
+        if (--(*pCount) == 0)
+        {
+          m_ObstacleCounts.Remove(uiIndex);
+          m_VoxelGrid.SetVoxel(vCoord, m_StaticGrid.CheckVoxel(vCoord));
+        }
+      }
+    }
+  }
+}
+
+plUInt32 plAiVoxelWorldModule::TakeSearchBudget(plUInt32 uiWanted)
+{
+  const plUInt32 uiPerSearch = static_cast<plUInt32>(plMath::Max(1, cvar_VoxelNavMaxNodesPerSearch.GetValue()));
+  const plUInt32 uiLeft = static_cast<plUInt32>(plMath::Max(0, m_iSearchBudget));
+  const plUInt32 uiGranted = plMath::Min(uiWanted, plMath::Min(uiPerSearch, uiLeft));
+
+  m_iSearchBudget -= static_cast<plInt32>(uiGranted);
+  return uiGranted;
 }
 
 PL_STATICLINK_FILE(AiPlugin, AiPlugin_Navigation_Implementation_VoxelWorldModule);

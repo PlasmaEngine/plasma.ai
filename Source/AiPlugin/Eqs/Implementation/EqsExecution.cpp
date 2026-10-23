@@ -1,5 +1,6 @@
 #include <AiPlugin/AiPluginPCH.h>
 
+#include <AiPlugin/Eqs/EqsCapture.h>
 #include <AiPlugin/Eqs/EqsWorldModule.h>
 #include <AiPlugin/Navigation/NavMesh.h>
 #include <Core/World/World.h>
@@ -193,10 +194,10 @@ void plAiEqsWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiScratc
     slot.m_uiItemCursor = 0;
   }
 
-  FinalizeQuery(slot);
+  FinalizeQuery(slot, ctx.m_uiRngSeed);
 }
 
-void plAiEqsWorldModule::FinalizeQuery(QuerySlot& slot)
+void plAiEqsWorldModule::FinalizeQuery(QuerySlot& slot, plUInt32 uiSeed)
 {
   const plAiEqsQueryDesc* pDesc = slot.m_pDesc;
 
@@ -209,20 +210,13 @@ void plAiEqsWorldModule::FinalizeQuery(QuerySlot& slot)
 
   // ---- run mode ----
 
-  if (pDesc->m_RunMode == plAiEqsRunMode::RandomOfTopPercent && slot.m_Items.GetCount() > 1)
+  // the query's own seed: queries finishing in the same frame must not all pick the same rank
+  slot.m_uiSelectSeed = uiSeed;
+  const plUInt32 uiPick = plAiEqsSelectCandidate(slot.m_Items.GetCount(), static_cast<plAiEqsRunMode::Enum>(pDesc->m_RunMode.GetValue()), pDesc->m_fTopPercent, uiSeed);
+
+  if (uiPick != 0)
   {
-    const float fPercent = plMath::Clamp(pDesc->m_fTopPercent, 1.0f, 100.0f);
-    const plUInt32 uiPool = plMath::Clamp<plUInt32>(static_cast<plUInt32>(plMath::Ceil(slot.m_Items.GetCount() * fPercent / 100.0f)), 1, slot.m_Items.GetCount());
-
-    plRandom rng;
-    rng.Initialize((static_cast<plUInt64>(slot.m_Result.m_uiFrameStamp) + 1) * 0x9E3779B97F4A7C15ull);
-
-    const plUInt32 uiPick = rng.UIntInRange(uiPool);
-
-    if (uiPick != 0)
-    {
-      plMath::Swap(slot.m_Items[0], slot.m_Items[uiPick]);
-    }
+    plMath::Swap(slot.m_Items[0], slot.m_Items[uiPick]);
   }
 
   // ---- fill the result ----
@@ -267,6 +261,96 @@ void plAiEqsWorldModule::FinalizeQuery(QuerySlot& slot)
   slot.m_Result.m_Status = slot.m_Result.m_TopN.IsEmpty() ? plAiEqsQueryResult::Status::NoResult : plAiEqsQueryResult::Status::Ready;
   slot.m_CompletedAt = GetWorld()->GetClock().GetAccumulatedTime();
   slot.m_Phase = QuerySlot::Phase::Done;
+}
+
+plUInt32 plAiEqsSelectCandidate(plUInt32 uiCount, plAiEqsRunMode::Enum runMode, float fTopPercent, plUInt32 uiSeed)
+{
+  if (runMode != plAiEqsRunMode::RandomOfTopPercent || uiCount <= 1)
+    return 0;
+
+  const float fPercent = plMath::Clamp(fTopPercent, 1.0f, 100.0f);
+  const plUInt32 uiPool = plMath::Clamp<plUInt32>(static_cast<plUInt32>(plMath::Ceil(uiCount * fPercent / 100.0f)), 1, uiCount);
+
+  plRandom rng;
+  rng.Initialize((static_cast<plUInt64>(uiSeed) + 1) * 0x9E3779B97F4A7C15ull);
+
+  return rng.UIntInRange(uiPool);
+}
+
+void plAiEqsReplayCapture(const plAiEqsQueryDesc& desc, const plAiEqsCapture& capture, plAiEqsReplayResult& out_result)
+{
+  plHybridArray<plUInt16, 16> testOrder;
+  plUInt16 uiFirstExpensive = 0;
+  BuildTestOrder(desc, testOrder, uiFirstExpensive);
+
+  out_result.m_Candidates.Clear();
+  out_result.m_Candidates.SetCount(capture.m_Candidates.GetCount());
+  out_result.m_uiMissingSamples = 0;
+  out_result.m_iSelected = -1;
+
+  plDynamicArray<plUInt32> survivors;
+
+  for (plUInt32 i = 0; i < capture.m_Candidates.GetCount(); ++i)
+  {
+    const plAiEqsCapture::Candidate& captured = capture.m_Candidates[i];
+    plAiEqsReplayResult::Candidate& replayed = out_result.m_Candidates[i];
+
+    // feed the captured measurements through the same processing the runtime applies after each test
+    plAiEqsItem item;
+
+    for (plUInt16 uiTestIndex : testOrder)
+    {
+      if (uiTestIndex >= captured.m_Samples.GetCount() || !captured.m_Samples[uiTestIndex].m_bMeasured)
+      {
+        replayed.m_bMissingSample = true;
+        continue;
+      }
+
+      const plAiEqsCapture::Sample& sample = captured.m_Samples[uiTestIndex];
+      item.m_fRaw = sample.m_fRaw;
+      item.m_fMeasurement = sample.m_fMeasurement;
+      item.m_bHasMeasurement = sample.m_bHasMeasurement;
+      item.m_TestData = sample.m_Data;
+
+      const plAiEqsTestDesc& testDesc = desc.m_Tests[uiTestIndex];
+
+      if (!testDesc.ProcessItem(*testDesc.m_pTest, item, uiTestIndex))
+      {
+        // a FailQuery policy hit unavailable data: the whole query would fail, this candidate can't win
+        item.m_bDiscarded = true;
+        item.m_uiRejectedBy = uiTestIndex;
+      }
+
+      if (item.m_bDiscarded)
+        break;
+    }
+
+    replayed.m_bDiscarded = item.m_bDiscarded;
+    replayed.m_uiRejectedBy = item.m_uiRejectedBy;
+    replayed.m_fFinal = item.m_bDiscarded ? 0.0f : ((item.m_fWeightSum > 0.0f) ? (item.m_fScoreSum / item.m_fWeightSum) : 1.0f);
+
+    if (replayed.m_bMissingSample)
+    {
+      ++out_result.m_uiMissingSamples;
+    }
+
+    if (!replayed.m_bDiscarded)
+    {
+      survivors.PushBack(i);
+    }
+  }
+
+  survivors.Sort([&](plUInt32 lhs, plUInt32 rhs) { return out_result.m_Candidates[lhs].m_fFinal > out_result.m_Candidates[rhs].m_fFinal; });
+
+  if (survivors.IsEmpty())
+    return;
+
+  const plUInt32 uiPick = plAiEqsSelectCandidate(survivors.GetCount(), static_cast<plAiEqsRunMode::Enum>(desc.m_RunMode.GetValue()), desc.m_fTopPercent, capture.m_uiSeed);
+
+  if (out_result.m_Candidates[survivors[uiPick]].m_fFinal > 0.0f)
+  {
+    out_result.m_iSelected = static_cast<plInt32>(survivors[uiPick]);
+  }
 }
 
 PL_STATICLINK_FILE(AiPlugin, AiPlugin_Eqs_Implementation_EqsExecution);

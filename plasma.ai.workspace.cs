@@ -8,6 +8,8 @@ public class PlasmaAiWorkspace : WorkspaceRules
     public PlasmaAiWorkspace(BuildContext context) : base(context)
     {
         TargetNames.Add("AiPlugin");
+        TargetNames.Add("EnginePluginAi");
         TargetNames.Add("EditorPluginAi");
+        TargetNames.Add("AiSemanticsTests");
     }
 }

@@ -139,6 +139,7 @@ struct PL_AIPLUGIN_DLL plAiEqsTestTrace
   bool m_bEvaluated = false;
   bool m_bPassed = true;
   bool m_bSkipped = false;
+  bool m_bHasMeasurement = false; ///< m_fMeasurement is a native measurement, not a copy of m_fRaw
 };
 
 PL_AIPLUGIN_DLL const char* plAiEqsTestDataName(plAiEqsTestData data);
@@ -215,6 +216,7 @@ struct PL_AIPLUGIN_DLL plAiEqsQueryResult
     NoResult,     ///< executed, but no candidate survived the filters
     AreaNotReady, ///< navmesh sectors not loaded yet (they have been requested; retry shortly)
     MissingData,  ///< a test's FailQuery policy encountered unavailable data
+    TimedOut,     ///< still pending after AI.EQS.MaxQueryAge seconds; the query was dropped
   };
 
   Status m_Status = Status::Invalid;

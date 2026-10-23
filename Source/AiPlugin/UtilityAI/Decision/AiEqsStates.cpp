@@ -1,7 +1,9 @@
 #include <AiPlugin/AiPluginPCH.h>
 
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
 #include <AiPlugin/UtilityAI/Decision/AiEqsStates.h>
+#include <AiPlugin/UtilityAI/Decision/AiStateMachineStates.h>
 #include <Core/Utils/Blackboard.h>
 #include <Core/World/World.h>
 
@@ -236,7 +238,7 @@ void plStateMachineState_AiRunEqsQuery::OnExit(plStateMachineInstance& ref_insta
 
   plWorld* pWorld = ref_instance.GetOwnerWorld();
 
-  if (pWorld == nullptr)
+  if (pWorld == nullptr || plAiBehaviorLogic::IsWorldShuttingDown())
     return;
 
   if (auto* pEqs = pWorld->GetModule<plAiEqsWorldModule>())
@@ -279,6 +281,7 @@ plResult plStateMachineState_AiRunEqsQuery::Serialize(plStreamWriter& inout_stre
 plResult plStateMachineState_AiRunEqsQuery::Deserialize(plStreamReader& inout_stream)
 {
   PL_SUCCEED_OR_RETURN(SUPER::Deserialize(inout_stream));
+  PL_SUCCEED_OR_RETURN(plAiCheckStateVersion(GetStaticRTTI()));
 
   inout_stream >> m_hQuery;
   inout_stream >> m_sTargetEntry;

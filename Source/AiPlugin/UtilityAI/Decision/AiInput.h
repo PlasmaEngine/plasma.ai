@@ -88,6 +88,17 @@ public:
   virtual float Evaluate(const plAiScoringContext& context) const override;
 };
 
+/// \brief The agent's alert level: 0 Unaware, 1 Suspicious, 2 Searching, 3 Alert (see plAiAlertLevel).
+///
+/// Set the consideration's input range to 0..3 to map it onto 0..1.
+class PL_AIPLUGIN_DLL plAiInput_AlertLevel : public plAiInput
+{
+  PL_ADD_DYNAMIC_REFLECTION(plAiInput_AlertLevel, plAiInput);
+
+public:
+  virtual float Evaluate(const plAiScoringContext& context) const override;
+};
+
 /// \brief A constant value. Useful to give a behavior a fixed base utility.
 class PL_AIPLUGIN_DLL plAiInput_Constant : public plAiInput
 {

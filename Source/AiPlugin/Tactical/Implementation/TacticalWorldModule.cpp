@@ -761,9 +761,9 @@ void plAiTacticalWorldModule::InvalidateAndQueueSector(plAiNavMesh::SectorID sec
       m_CoverSectors.ExpandAndGetRef();
     }
 
+    // a reused entry keeps counting its bake generation: handles and bakes from its previous sector must not match
     CoverSector& newEntry = m_CoverSectors[uiEntry];
     newEntry.m_SectorID = sectorID;
-    newEntry.m_uiBakeGeneration = 0;
     newEntry.m_bInUse = true;
     newEntry.m_bBakePending = false;
     newEntry.m_Points.Clear();
@@ -772,9 +772,30 @@ void plAiTacticalWorldModule::InvalidateAndQueueSector(plAiNavMesh::SectorID sec
   }
 
   CoverSector& entry = m_CoverSectors[uiEntry];
+  ++entry.m_uiChangeCounter; // a bake that is in flight now is outdated
 
-  // release all claims into this sector before dropping its points
-  for (const plAiCoverPoint& point : entry.m_Points)
+  const plAiNavMeshSector* pSector = m_pCoverNavMesh->GetSector(sectorID);
+  const bool bUsable = pSector != nullptr && pSector->m_FlagUsable == 1;
+
+  if (!bUsable)
+  {
+    // no navmesh here anymore, so no rebake will replace the points: drop them and their claims now
+    ClearCoverPoints(entry);
+    return;
+  }
+
+  // the points and their claims stay until the rebake replaces them (CollectFinishedBakes carries the claims over), so
+  // agents in cover keep it while a door opens or a crate moves nearby
+  if (!entry.m_bBakePending)
+  {
+    entry.m_bBakePending = true;
+    m_BakeQueue.PushBack(sectorID);
+  }
+}
+
+void plAiTacticalWorldModule::ClearCoverPoints(CoverSector& ref_entry)
+{
+  for (const plAiCoverPoint& point : ref_entry.m_Points)
   {
     if (point.m_uiClaimIndex != 0xFFFF)
     {
@@ -782,18 +803,9 @@ void plAiTacticalWorldModule::InvalidateAndQueueSector(plAiNavMesh::SectorID sec
     }
   }
 
-  entry.m_Points.Clear();
-  entry.m_Surfaces.Clear();
-  ++entry.m_uiBakeGeneration; // stale handles and in-flight bakes now mismatch
-
-  const plAiNavMeshSector* pSector = m_pCoverNavMesh->GetSector(sectorID);
-  const bool bUsable = pSector != nullptr && pSector->m_FlagUsable == 1;
-
-  if (bUsable && !entry.m_bBakePending)
-  {
-    entry.m_bBakePending = true;
-    m_BakeQueue.PushBack(sectorID);
-  }
+  ref_entry.m_Points.Clear();
+  ref_entry.m_Surfaces.Clear();
+  ++ref_entry.m_uiBakeGeneration; // stale handles now mismatch
 }
 
 void plAiTacticalWorldModule::DispatchBakes(const plAiNavMesh& navMesh, const plPhysicsWorldModuleInterface* pPhysics)
@@ -896,7 +908,7 @@ void plAiTacticalWorldModule::DispatchBakes(const plAiNavMesh& navMesh, const pl
     task.m_uiMaxPoints = plMath::Clamp<plUInt32>(tacticalConfig.m_uiMaxCoverPointsPerSector, 1, 1024);
 
     pSlot->m_uiEntryIndex = uiEntry;
-    pSlot->m_uiGenerationAtDispatch = entry.m_uiBakeGeneration;
+    pSlot->m_uiGenerationAtDispatch = entry.m_uiChangeCounter;
     pSlot->m_TaskID = plTaskSystem::StartSingleTask(pSlot->m_pTask, plTaskPriority::LongRunning);
     pSlot->m_bInFlight = true;
 
@@ -921,7 +933,7 @@ void plAiTacticalWorldModule::CollectFinishedBakes()
     if (!entry.m_bInUse || entry.m_SectorID != slot.m_pTask->m_SectorID)
       continue;
 
-    if (entry.m_uiBakeGeneration != slot.m_uiGenerationAtDispatch)
+    if (entry.m_uiChangeCounter != slot.m_uiGenerationAtDispatch)
     {
       // the sector changed again while this bake ran - discard and bake once more
       if (!m_BakeQueue.Contains(entry.m_SectorID))
@@ -932,10 +944,55 @@ void plAiTacticalWorldModule::CollectFinishedBakes()
       continue;
     }
 
+    CarryCoverClaims(entry, slot.m_uiEntryIndex, slot.m_pTask->m_Points);
+
     entry.m_Points.Swap(slot.m_pTask->m_Points);
     entry.m_Surfaces.Swap(slot.m_pTask->m_Surfaces);
     entry.m_bBakePending = false;
   }
+}
+
+void plAiTacticalWorldModule::CarryCoverClaims(CoverSector& ref_entry, plUInt32 uiEntryIndex, plDynamicArray<plAiCoverPoint>& ref_newPoints)
+{
+  // an agent in cover keeps a claim on the new point closest to its old one, if there is one within reach
+  constexpr float fMaxMoveSqr = 0.75f * 0.75f;
+  const plUInt16 uiNewGeneration = static_cast<plUInt16>(ref_entry.m_uiBakeGeneration + 1);
+
+  for (plAiCoverPoint& oldPoint : ref_entry.m_Points)
+  {
+    if (oldPoint.m_uiClaimIndex == 0xFFFF)
+      continue;
+
+    plUInt32 uiBest = plInvalidIndex;
+    float fBestSqr = fMaxMoveSqr;
+
+    for (plUInt32 i = 0; i < ref_newPoints.GetCount(); ++i)
+    {
+      const float fDistSqr = (ref_newPoints[i].m_vPosition - oldPoint.m_vPosition).GetLengthSquared();
+
+      if (ref_newPoints[i].m_uiClaimIndex == 0xFFFF && fDistSqr < fBestSqr)
+      {
+        fBestSqr = fDistSqr;
+        uiBest = i;
+      }
+    }
+
+    if (uiBest == plInvalidIndex)
+    {
+      ReleaseClaimAtIndex(oldPoint.m_uiClaimIndex); // the cover is gone
+      continue;
+    }
+
+    Claim& claim = m_Claims[oldPoint.m_uiClaimIndex];
+    claim.m_hPoint.m_uiSectorEntry = uiEntryIndex;
+    claim.m_hPoint.m_uiPoint = static_cast<plUInt16>(uiBest);
+    claim.m_hPoint.m_uiBakeGeneration = uiNewGeneration;
+
+    ref_newPoints[uiBest].m_uiClaimIndex = oldPoint.m_uiClaimIndex;
+    oldPoint.m_uiClaimIndex = 0xFFFF;
+  }
+
+  ref_entry.m_uiBakeGeneration = uiNewGeneration; // handles to the old points are stale now
 }
 
 plAiTacticalWorldModule::AuthoredCoverID plAiTacticalWorldModule::RegisterAuthoredCover(plComponentHandle hComponent)

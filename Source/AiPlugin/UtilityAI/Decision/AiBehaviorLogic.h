@@ -62,6 +62,21 @@ public:
   /// \brief Called when the behavior stops being the active behavior.
   /// \param bInterrupted true when another behavior took over, false when this logic reported Done/Failed.
   virtual void Deactivate(plAiAgentContext& ref_context, bool bInterrupted) {}
+
+  /// \brief True while the brain module shuts down with its world.
+  ///
+  /// An agent removed from a running world (its object deleted or deactivated) destroys its logic without Deactivate, but a
+  /// state machine's current state still exits and releases what it holds (claims, queries, navigation). When the brain
+  /// module itself shuts down, other world modules may already be gone, so logic and states destroyed then must not reach
+  /// into the world; what they hold goes away with it.
+  static bool IsWorldShuttingDown();
+
+  /// \brief Marks the world as shutting down for the scope's lifetime (see IsWorldShuttingDown).
+  struct PL_AIPLUGIN_DLL WorldShutdownScope
+  {
+    WorldShutdownScope();
+    ~WorldShutdownScope();
+  };
 };
 
 /// \brief Behavior logic that runs a state machine asset.

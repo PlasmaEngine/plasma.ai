@@ -69,8 +69,31 @@ void plAiCrowdWorldModule::Initialize()
     RegisterUpdateFunction(updateDesc);
   }
 
+  ResizeProximityGrid(1024);
+}
+
+void plAiCrowdWorldModule::ResizeProximityGrid(plUInt32 uiPoolSize)
+{
+  if (m_pGrid != nullptr)
+  {
+    dtFreeProximityGrid(m_pGrid);
+  }
+
   m_pGrid = dtAllocProximityGrid();
-  m_pGrid->init(1024, 2.0f);
+  m_pGrid->init(static_cast<int>(uiPoolSize), s_fProximityCellSize);
+  m_uiGridPoolSize = uiPoolSize;
+}
+
+plUInt32 plAiCrowdWorldModule::CountProximityCells(const plAiCrowdAgentState& state)
+{
+  // the same cell math as dtProximityGrid::addItem
+  const float fInvCellSize = 1.0f / s_fProximityCellSize;
+  const plInt32 iMinX = static_cast<plInt32>(plMath::Floor((state.m_vPosition.x - state.m_fRadius) * fInvCellSize));
+  const plInt32 iMaxX = static_cast<plInt32>(plMath::Floor((state.m_vPosition.x + state.m_fRadius) * fInvCellSize));
+  const plInt32 iMinY = static_cast<plInt32>(plMath::Floor((state.m_vPosition.y - state.m_fRadius) * fInvCellSize));
+  const plInt32 iMaxY = static_cast<plInt32>(plMath::Floor((state.m_vPosition.y + state.m_fRadius) * fInvCellSize));
+
+  return static_cast<plUInt32>((iMaxX - iMinX + 1) * (iMaxY - iMinY + 1));
 }
 
 void plAiCrowdWorldModule::Deinitialize()
@@ -182,7 +205,30 @@ void plAiCrowdWorldModule::UpdateSolve(const UpdateContext& context)
       return m_Slots[lhs].m_State.m_pNavMesh < m_Slots[rhs].m_State.m_pNavMesh;
     });
 
-    // rebuild the proximity grid (pure 2D, engine XY)
+    // rebuild the proximity grid (pure 2D, engine XY). Its pool holds one entry per covered cell and
+    // silently skips agents once full, so size it from this frame's agents first.
+    plUInt32 uiCellsNeeded = 0;
+
+    for (AgentID id : m_SolveList)
+    {
+      uiCellsNeeded += CountProximityCells(m_Slots[id].m_State);
+    }
+
+    constexpr plUInt32 uiMaxPoolSize = 0xFFFF; // the grid indexes its pool with unsigned short
+    m_uiGridCellsUsed = plMath::Min(uiCellsNeeded, uiMaxPoolSize);
+    m_uiGridCellsDropped = uiCellsNeeded - m_uiGridCellsUsed;
+
+    if (uiCellsNeeded > m_uiGridPoolSize && m_uiGridPoolSize < uiMaxPoolSize)
+    {
+      ResizeProximityGrid(plMath::Min(plMath::PowerOfTwo_Ceil(uiCellsNeeded + uiCellsNeeded / 2), uiMaxPoolSize));
+    }
+
+    if (m_uiGridCellsDropped > 0 && !m_bWarnedGridOverflow)
+    {
+      plLog::Warning("AI crowd: {} agents cover more proximity cells than the grid can hold; some avoid each other less. Use larger cells or fewer agents.", m_SolveList.GetCount());
+      m_bWarnedGridOverflow = true;
+    }
+
     m_pGrid->clear();
 
     for (AgentID id : m_SolveList)

@@ -75,9 +75,14 @@ private:
     bool m_bStarted = false;
     bool m_bBuiltinWait = false;
     bool m_bDone = false;
+
+    /// The user entries applied at the start and the values that revert them: a use can end after its object is gone.
+    plHybridArray<plHashedString, 4> m_AppliedEntries;
+    plHybridArray<plVariant, 4> m_RevertValues;
   };
 
-  void ApplyUserEntries(plStateMachineInstance& ref_instance, const plComponentHandle& hComponent, bool bApply) const;
+  void ApplyUserEntries(plStateMachineInstance& ref_instance, InstanceData* pData, const plComponentHandle& hComponent) const;
+  void RevertUserEntries(plStateMachineInstance& ref_instance, InstanceData* pData) const;
   void AbortUse(plStateMachineInstance& ref_instance, InstanceData* pData, plAiTacticalWorldModule* pTactical, plGameObject* pOwner) const;
 };
 

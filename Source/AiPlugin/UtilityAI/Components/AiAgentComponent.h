@@ -7,6 +7,8 @@
 
 using plAiAgentComponentManager = plComponentManager<class plAiAgentComponent, plBlockStorageType::FreeList>;
 
+class plAiBrainWorldModule;
+
 /// \brief Makes the owner object a utility AI agent.
 ///
 /// The component itself is only a thin configuration shell: it references an 'AI Archetype' asset
@@ -54,11 +56,43 @@ public:
   /// \brief The team this agent belongs to (component override or archetype team).
   plHashedString GetResolvedTeam() const;
 
+  /// \name Script API
+  ///
+  /// Functions for scripts, state machines and game code. All of them only take effect while the
+  /// component simulates.
+  ///@{
+
+  /// \brief Makes the agent decide as soon as the archetype's wake spacing allows.
+  void RequestDecision(); // [ scriptable ]
+
+  /// \brief A disabled behavior doesn't compete. Disabling the active behavior ends it, even while locked.
+  void SetBehaviorEnabled(const char* szBehavior, bool bEnabled); // [ scriptable ]
+
+  /// \brief Scales a behavior's weight. A duration of 0 keeps the scale until it is changed again; 1 restores the authored weight.
+  void SetBehaviorWeight(const char* szBehavior, float fScale, float fDurationSeconds); // [ scriptable ]
+
+  /// \brief Gives the agent a command through its blackboard: Ai_CommandActive, Ai_Command, Ai_CommandPosition and
+  /// Ai_CommandTarget. Behaviors that score on Ai_CommandActive carry it out. An expiry of 0 keeps it until cancelled.
+  void IssueCommand(const char* szCommand, const plVec3& vPosition, plGameObjectHandle hTarget, float fExpirySeconds); // [ scriptable ]
+
+  /// \brief Clears the current command (Ai_CommandActive becomes false).
+  void CancelCommand(); // [ scriptable ]
+
+  /// \brief The name of the active behavior, empty when idle.
+  const char* GetActiveBehavior() const; // [ scriptable ]
+
+  /// \brief The object the active behavior targets, if any.
+  plGameObjectHandle GetActiveTarget() const; // [ scriptable ]
+
+  ///@}
+
 protected:
   void OnMsgAiStimulus(plMsgAiStimulus& ref_msg);
 
 private:
   friend class plAiBrainWorldModule;
+
+  plAiBrainWorldModule* GetBrain() const; ///< nullptr while not registered
 
   plUInt32 m_uiAgentIndex = plInvalidIndex;
   plUInt32 m_uiTacticalAgentID = plInvalidIndex; ///< registration with plAiTacticalWorldModule (exposure/cover probes)

@@ -15,9 +15,10 @@ struct plAiVoxelNavigationComponentState
 
   enum Enum
   {
-    Idle,   ///< Currently not navigating.
-    Moving, ///< Moving along a computed 3D path.
-    Failed, ///< Path could not be found.
+    Idle,      ///< Currently not navigating.
+    Moving,    ///< Moving along a computed 3D path.
+    Failed,    ///< Path could not be found.
+    Searching, ///< Waiting for the voxel grid, or computing the first path to the destination.
 
     Default = Idle
   };
@@ -30,8 +31,11 @@ using plAiVoxelNavigationComponentManager = plComponentManagerSimple<class plAiV
 /// Navigates a game object through 3D space using a voxel grid.
 ///
 /// Suitable for flying creatures, underwater movement, or space navigation.
-/// Call SetDestination() with a world-space target. The component computes
-/// a 3D A* path through free voxels and moves the game object along that path.
+/// Call SetDestination() with a world-space target. The component computes a 3D A* path through free
+/// voxels, keeping AgentRadius away from occupied ones, and moves the game object along that path.
+/// Searches run over several frames under a shared budget (AI.VoxelNav.*). A destination set before the
+/// grid is ready is kept until it is. When obstacles change the grid, the path is recomputed while the
+/// object keeps following the old one.
 class PL_AIPLUGIN_DLL plAiVoxelNavigationComponent : public plComponent
 {
   PL_DECLARE_COMPONENT_TYPE(plAiVoxelNavigationComponent, plComponent, plAiVoxelNavigationComponentManager);
@@ -69,6 +73,7 @@ public:
   float m_fAcceleration = 3.0f;    ///< [ property ] How fast to gain speed.
   float m_fDeceleration = 8.0f;    ///< [ property ] How fast to brake.
   float m_fReachedDistance = 1.0f; ///< [ property ] Distance at which destination is considered reached.
+  float m_fAgentRadius = 0.0f;     ///< [ property ] How far paths stay from occupied voxels.
   bool m_bApplySteering = true;    ///< [ property ] Whether to apply movement to the game object.
 
   plBitflags<plAiVoxelNavigationDebugFlags> m_DebugFlags; ///< [ property ]
@@ -78,7 +83,14 @@ public:
 
 protected:
   void Update();
+  void UpdateSearch();
+  void StartSearch();
+  void ReportFailure(plAiVoxelNavigation::State result, const plVec3& vFrom);
   void MoveTowardsWaypoint(float fTimeDiff);
+
+  plVec3 m_vDestination = plVec3::MakeZero();
+  bool m_bHasDestination = false;
+  plTime m_LastSearchStart;
 
   plAiVoxelNavigation m_Navigation;
   plEnum<plAiVoxelNavigationComponentState> m_State;

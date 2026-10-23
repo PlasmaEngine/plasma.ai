@@ -40,6 +40,51 @@ void FillOutConfig(rcConfig& ref_cfg, const plAiNavmeshConfig& config, const plB
   rcCalcGridSize(ref_cfg.bmin, ref_cfg.bmax, ref_cfg.cs, &ref_cfg.width, &ref_cfg.height);
 }
 
+/// The ground type (area) under a polygon's centre before the blocker marking replaced it; 1 (default ground) if none.
+static plUInt8 GetGroundUnderPolygon(const rcPolyMesh& mesh, int iPoly, const rcCompactHeightfield& chf, plArrayPtr<const plUInt8> groundAreas)
+{
+  const unsigned short* pPoly = &mesh.polys[iPoly * mesh.nvp * 2];
+
+  int iSumX = 0, iSumY = 0, iSumZ = 0, iNumVerts = 0;
+  for (int v = 0; v < mesh.nvp && pPoly[v] != RC_MESH_NULL_IDX; ++v)
+  {
+    const unsigned short* pVert = &mesh.verts[pPoly[v] * 3];
+    iSumX += pVert[0];
+    iSumY += pVert[1];
+    iSumZ += pVert[2];
+    ++iNumVerts;
+  }
+
+  if (iNumVerts == 0)
+    return 1;
+
+  // poly mesh coordinates leave out the heightfield's border
+  const int iCellX = iSumX / iNumVerts + mesh.borderSize;
+  const int iCellZ = iSumZ / iNumVerts + mesh.borderSize;
+  const int iHeight = iSumY / iNumVerts;
+
+  if (iCellX < 0 || iCellZ < 0 || iCellX >= chf.width || iCellZ >= chf.height)
+    return 1;
+
+  // the span closest in height: the cell may hold several floors
+  const rcCompactCell& cell = chf.cells[iCellX + iCellZ * chf.width];
+  plUInt8 uiGround = 1;
+  int iBestDistance = plMath::MaxValue<int>();
+
+  for (unsigned int i = cell.index; i < cell.index + cell.count; ++i)
+  {
+    const int iDistance = plMath::Abs(static_cast<int>(chf.spans[i].y) - iHeight);
+
+    if (groundAreas[i] != RC_NULL_AREA && groundAreas[i] < plAiNumGroundTypes && iDistance < iBestDistance)
+    {
+      iBestDistance = iDistance;
+      uiGround = groundAreas[i];
+    }
+  }
+
+  return uiGround;
+}
+
 plResult BuildRecastPolyMesh(const plAiNavmeshConfig& config, plBoundingBox aabb, rcPolyMesh& out_polyMesh, rcContext* pContext, plArrayPtr<const plVec3> vertices, plArrayPtr<const plAiNavMeshTriangle> triangles, plArrayPtr<plUInt8> triangleAreaIDs, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones)
 {
   const float* pVertices = &vertices[0].x;
@@ -103,6 +148,11 @@ plResult BuildRecastPolyMesh(const plAiNavmeshConfig& config, plBoundingBox aabb
     const float bmax[3] = {carveBox.m_vMax.x, carveBox.m_vMax.z, carveBox.m_vMax.y};
     rcMarkBoxArea(pContext, bmin, bmax, RC_NULL_AREA, *compactHeightfield);
   }
+
+  // the ground types the blocker marking below overwrites, so its polygons get them back
+  plDynamicArray<plUInt8> groundAreas;
+  groundAreas.SetCountUninitialized(compactHeightfield->spanCount);
+  plMemoryUtils::Copy(groundAreas.GetData(), compactHeightfield->areas, compactHeightfield->spanCount);
 
   // mark nav blocker volumes with a reserved area id: regions never merge across area ids, so
   // this forces dedicated polygons under each blocker, which the runtime Blocked flag then hits
@@ -195,8 +245,8 @@ plResult BuildRecastPolyMesh(const plAiNavmeshConfig& config, plBoundingBox aabb
     if (out_polyMesh.areas[i] == plAiNavMeshBlockerZoneAreaID)
     {
       // the reserved id only exists to force the poly split during partitioning -
-      // downstream (filters, ground types) these polys are regular default ground
-      out_polyMesh.areas[i] = 1;
+      // downstream (filters) these polys are regular ground of the type that lies under them
+      out_polyMesh.areas[i] = GetGroundUnderPolygon(out_polyMesh, i, *compactHeightfield, groundAreas);
     }
 
     if (out_polyMesh.areas[i] != RC_NULL_AREA)
@@ -292,7 +342,7 @@ plResult BuildDetourNavMeshData(const plAiNavmeshConfig& config, const rcPolyMes
 
 void plNavMeshSectorGenerationTask::Execute()
 {
-  m_pWorldNavMesh->BuildSector(m_SectorID, m_pNavGeo, m_Links, m_CarveBoxes, m_BlockerZones, m_AvoidZones);
+  m_pWorldNavMesh->BuildSector(*m_pSector, m_SectorID, m_pNavGeo, m_Links, m_CarveBoxes, m_BlockerZones, m_AvoidZones);
 }
 
 static plInt8 GetSurfaceGroundType(const plSurfaceResource* pSurf)
@@ -381,12 +431,16 @@ static void QueryInputGeo(const plNavmeshGeoWorldModuleInterface* pGeo, plUInt32
   }
 }
 
-void plAiNavMesh::BuildSector(SectorID sectorID, const plNavmeshGeoWorldModuleInterface* pGeo, plArrayPtr<const plAiNavLinkData> links, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones)
+void plAiNavMesh::BuildSector(plAiNavMeshSector& ref_sector, SectorID sectorID, const plNavmeshGeoWorldModuleInterface* pGeo, plArrayPtr<const plAiNavLinkData> links, plArrayPtr<const plBoundingBox> carveBoxes, plArrayPtr<const plBoundingBox> blockerZones, plArrayPtr<const plBoundingBox> avoidZones)
 {
+  // never touch m_Sectors here: the main thread inserts into it while builds run
+  const plTime startTime = plTime::Now();
   const plVec2I32 sectorCoord = CalculateSectorCoord(sectorID);
-  auto& sector = m_Sectors[sectorID];
+  auto& sector = ref_sector;
 
-  PL_ASSERT_DEV(sector.m_FlagUpdateAvailable == 0, "Shouldn't update a sector that is already being updated");
+  sector.m_NavmeshDataNew.Clear();
+  sector.m_uiBuildPolyCount = 0;
+  sector.m_bBuildFailed = false;
 
   const plBoundingBox bounds = GetSectorBounds(sectorCoord, -1000, +1000);
 
@@ -407,19 +461,32 @@ void plAiNavMesh::BuildSector(SectorID sectorID, const plNavmeshGeoWorldModuleIn
     rcContext recastContext;
     rcPolyMesh polyMesh;
 
-    BuildRecastPolyMesh(m_NavmeshConfig, bounds, polyMesh, &recastContext, inputGeo.m_Vertices, inputGeo.m_Triangles, inputGeo.m_TriangleAreaIDs, carveBoxes, blockerZones, avoidZones).AssertSuccess();
-
-    if (polyMesh.nverts > 0 && polyMesh.npolys > 0)
+    if (BuildRecastPolyMesh(m_NavmeshConfig, bounds, polyMesh, &recastContext, inputGeo.m_Vertices, inputGeo.m_Triangles, inputGeo.m_TriangleAreaIDs, carveBoxes, blockerZones, avoidZones).Failed())
     {
-      BuildDetourNavMeshData(m_NavmeshConfig, polyMesh, sector.m_NavmeshDataNew, sectorCoord, links).AssertSuccess();
+      sector.m_bBuildFailed = true;
+    }
+    else if (polyMesh.nverts > 0 && polyMesh.npolys > 0)
+    {
+      if (BuildDetourNavMeshData(m_NavmeshConfig, polyMesh, sector.m_NavmeshDataNew, sectorCoord, links).Failed())
+      {
+        sector.m_bBuildFailed = true;
+        sector.m_NavmeshDataNew.Clear();
+      }
+      else
+      {
+        sector.m_uiBuildPolyCount = static_cast<plUInt32>(polyMesh.npolys);
+      }
     }
   }
 
+  if (sector.m_bBuildFailed)
   {
-    PL_ASSERT_DEV(sector.m_FlagUpdateAvailable == 0, "Race condition in navmesh sector update");
-    sector.m_FlagUpdateAvailable = 1;
-
-    PL_LOCK(m_Mutex);
-    m_UpdatingSectors.PushBack(sectorID);
+    plLog::Error("Navmesh sector {}|{} failed to build; it stays without polygons until it is rebuilt.", sectorCoord.x, sectorCoord.y);
   }
+
+  sector.m_BuildDuration = plTime::Now() - startTime;
+
+  // the mutex hands the build results over to FinalizeSectorUpdates
+  PL_LOCK(m_Mutex);
+  m_UpdatingSectors.PushBack(sectorID);
 }

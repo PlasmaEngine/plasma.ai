@@ -10,6 +10,7 @@ class plNavMeshSectorGenerationTask : public plTask
 public:
   plAiNavMesh::SectorID m_SectorID = plInvalidIndex;
   plAiNavMesh* m_pWorldNavMesh = nullptr;
+  plAiNavMeshSector* m_pSector = nullptr; ///< from plAiNavMesh::BeginSectorBuild
   const plNavmeshGeoWorldModuleInterface* m_pNavGeo = nullptr;
 
   /// Snapshot of the nav links whose start point lies in this sector (copied at dispatch time,

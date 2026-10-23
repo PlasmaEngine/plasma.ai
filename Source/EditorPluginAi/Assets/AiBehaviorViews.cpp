@@ -1,11 +1,13 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
-#include <EditorPluginAi/Assets/AiBehaviorAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiBehaviorAssetWindow.h>
 #include <EditorPluginAi/Assets/AiBehaviorViews.h>
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
+#include <EditorPluginAi/Debugger/AiDebugSession.h>
 
 #include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
+#include <AiPlugin/UtilityAI/Decision/AiDebugSnapshot.h>
 #include <AiPlugin/UtilityAI/Decision/AiInput.h>
 #include <Core/Utils/Blackboard.h>
 #include <EditorFramework/Assets/AssetCurator.h>
@@ -60,22 +62,22 @@ namespace
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiBehaviorView
+// plAiBehaviorView
 
-plQtAiBehaviorView::plQtAiBehaviorView(plQtAiBehaviorAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiBehavior")
+plAiBehaviorView::plAiBehaviorView(plAiBehaviorAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiBehavior")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiBehaviorView::~plQtAiBehaviorView() = default;
+plAiBehaviorView::~plAiBehaviorView() = default;
 
-bool plQtAiBehaviorView::IsRebuildBlocked() const
+bool plAiBehaviorView::IsRebuildBlocked() const
 {
   return m_pWindow->GetDocument()->GetCommandHistory()->IsInTransaction();
 }
 
-void plQtAiBehaviorView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiBehaviorView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -121,7 +123,7 @@ void plQtAiBehaviorView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   }
 }
 
-float plQtAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
+float plAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -176,9 +178,9 @@ float plQtAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
         Invalidate(); });
   };
 
-  numberField("Weight", "Weight", pProps->m_fWeight, 2, {}, 64.0f, "Base utility multiplier. Archetypes additionally apply their WeightScale.", [this](double fValue)
+  numberField("Weight", "Weight", pProps->m_fWeight, 2, {}, 64.0f, "Utility multiplier from 0 to 1. Archetypes additionally apply their WeightScale; utility is capped at 1.", [this](double fValue)
     { m_pWindow->SetRootValue("Weight", plVariant(static_cast<float>(fValue)), "Change Weight"); },
-    0.0, 10.0);
+    0.0, 1.0);
 
   numberField("Commit", "Commit", pProps->m_fCommitBonus, 2, {}, 64.0f, "Stickiness: while this behavior runs, a challenger must beat its score by this much.", [this](double fValue)
     { m_pWindow->SetRootValue("CommitBonus", plVariant(static_cast<float>(fValue)), "Change Commit Bonus"); },
@@ -198,7 +200,7 @@ float plQtAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
   return fHeight + 1.0f;
 }
 
-float plQtAiBehaviorView::BuildLogicRow(plUiElement* pRoot, float fTop, float fWidth)
+float plAiBehaviorView::BuildLogicRow(plUiElement* pRoot, float fTop, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -266,7 +268,7 @@ float plQtAiBehaviorView::BuildLogicRow(plUiElement* pRoot, float fTop, float fW
   return fHeight + 1.0f;
 }
 
-void plQtAiBehaviorView::BuildConsiderationCard(plUiElement* pBody, float fWidth, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiConsiderationObject* pNative)
+void plAiBehaviorView::BuildConsiderationCard(plUiElement* pBody, float fWidth, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiConsiderationObject* pNative)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -387,7 +389,7 @@ void plQtAiBehaviorView::BuildConsiderationCard(plUiElement* pBody, float fWidth
   pCard->m_vOffsets.w = y + 6.0f + 1.0f;
 }
 
-void plQtAiBehaviorView::ShowCategoryMenu()
+void plAiBehaviorView::ShowCategoryMenu()
 {
   const plInt32 iCurrent = m_pWindow->GetBehaviorDocument()->GetProperties()->m_Category.GetValue();
 
@@ -403,7 +405,7 @@ void plQtAiBehaviorView::ShowCategoryMenu()
     { m_pWindow->SetRootValue("Category", plVariant(static_cast<plInt32>(uiId)), "Change Category"); });
 }
 
-void plQtAiBehaviorView::ShowLogicMenu()
+void plAiBehaviorView::ShowLogicMenu()
 {
   const plInt32 iCurrent = GetLogicType(m_pWindow->GetBehaviorDocument()->GetProperties());
 
@@ -419,15 +421,15 @@ void plQtAiBehaviorView::ShowLogicMenu()
     { m_pWindow->ChangeLogicType(static_cast<plInt32>(uiId)); });
 }
 
-void plQtAiBehaviorView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
+void plAiBehaviorView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
 {
   plEditorUiMenu menu;
 
   plEditorUiMenuItem& presets = menu.AddSubmenu("Presets");
-  for (plUInt32 i = 0; i < plQtAiBehaviorAssetDocumentWindow::GetCurvePresetCount(); ++i)
+  for (plUInt32 i = 0; i < plAiBehaviorAssetDocumentWindow::GetCurvePresetCount(); ++i)
   {
     plEditorUiMenuItem& item = presets.m_Children.ExpandAndGetRef();
-    item.m_sLabel = plQtAiBehaviorAssetDocumentWindow::GetCurvePresetName(i);
+    item.m_sLabel = plAiBehaviorAssetDocumentWindow::GetCurvePresetName(i);
     item.m_uiId = i;
   }
 
@@ -442,7 +444,7 @@ void plQtAiBehaviorView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
       m_pWindow->ApplyCurvePreset(guid, uiId); });
 }
 
-void plQtAiBehaviorView::ShowAddMenu(plStringView sAnchor)
+void plAiBehaviorView::ShowAddMenu(plStringView sAnchor)
 {
   m_MenuTypes.Clear();
   plDynamicArray<plEditorUiSearchMenuItem> items;
@@ -472,7 +474,7 @@ void plQtAiBehaviorView::ShowAddMenu(plStringView sAnchor)
 }
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiScorePreviewView
+// plAiScorePreviewView
 
 namespace
 {
@@ -482,23 +484,29 @@ namespace
   constexpr float s_fRawWidth = 44.0f;
   constexpr float s_fOutWidth = 40.0f;
   constexpr float s_fBarHeight = 18.0f;
+  constexpr float s_fSourceRow = 34.0f;
 } // namespace
 
-plQtAiScorePreviewView::plQtAiScorePreviewView(plQtAiBehaviorAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiScorePreview")
+plAiScorePreviewView::plAiScorePreviewView(plAiBehaviorAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiScorePreview")
   , m_pWindow(pWindow)
 {
+  plEditorUiServices::s_TickEvent.AddEventHandler(plMakeDelegate(&plAiScorePreviewView::OnTick, this));
 }
 
-plQtAiScorePreviewView::~plQtAiScorePreviewView() = default;
+plAiScorePreviewView::~plAiScorePreviewView()
+{
+  plEditorUiServices::s_TickEvent.RemoveEventHandler(plMakeDelegate(&plAiScorePreviewView::OnTick, this));
+}
 
-void plQtAiScorePreviewView::ResetSliders()
+void plAiScorePreviewView::ResetSliders()
 {
   m_SliderValues.Clear();
+  m_LiveHistory.Clear();
   Invalidate();
 }
 
-void plQtAiScorePreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiScorePreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -517,21 +525,407 @@ void plQtAiScorePreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   while (m_SliderValues.GetCount() < uiRows)
     m_SliderValues.PushBack(0.7f);
 
-  plUiScrollView* pBody = AddScrollBody(pRoot, plRectFloat(0, 0, fWidth, vSize.y), "Score.Body", 0.0f, 0.0f);
+  BuildSource(pRoot, fWidth);
 
-  Section(pBody, "Simulated situation", AiColor());
-  BuildSituation(pBody, fWidth, uiRows);
+  plUiScrollView* pBody = AddScrollBody(pRoot, plRectFloat(0, s_fSourceRow, fWidth, vSize.y - s_fSourceRow), "Score.Body", 0.0f, 0.0f);
+
+  if (m_bLive && m_LiveState == LiveState::Live)
+  {
+    plStringBuilder sTitle;
+    sTitle.SetFormat("{} \xC2\xB7 inputs of the latest decision", m_sLiveAgent);
+    Section(pBody, sTitle, AiColor(), {}, "last 40 decisions per input");
+  }
+  else
+  {
+    Section(pBody, m_bLive ? "Live agent" : "Simulated situation", AiColor(), {}, m_bLive ? "" : "drag to set raw values");
+  }
+
+  if (m_bLive && m_LiveState != LiveState::Live)
+  {
+    const char* szLine = "";
+    switch (m_LiveState)
+    {
+      case LiveState::NoScene:
+        szLine = "Simulate a scene and open its AI Debugger (the AI Overlays menu in the viewport toolbar). The values follow the agent it watches.";
+        break;
+      case LiveState::NoAgent:
+        szLine = "Pick an agent in the AI Debugger, or with the agent menu above.";
+        break;
+      case LiveState::NoBehavior:
+        szLine = "The watched agent's archetype does not use this behavior. Pick an agent that does.";
+        break;
+      case LiveState::Stalled:
+        szLine = "The scene's world isn't advancing: the simulation is paused, or the scene is hidden (the editor only updates a scene whose viewport shows). The values come back when the scene runs in view.";
+        break;
+      default:
+        szLine = "Waiting for the agent's next decision.";
+        break;
+    }
+
+    auto* pNote = Panel(pBody);
+    pNote->m_vOffsets.w = 56.0f;
+    pNote->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+    auto* pText = Label(pNote, plRectFloat(10.0f, 8.0f, fWidth - 20.0f, 44.0f), szLine, Dim(), FontSize - 2);
+    pText->m_bWrap = true;
+    pText->m_VAlign = plUiTextVAlign::Top;
+  }
+  else
+  {
+    BuildSituation(pBody, fWidth, uiRows);
+  }
 
   Section(pBody, "Result \xE2\x80\x94 mirrors ScoreUtility", AiColor());
   BuildResult(pBody, fWidth);
+
+  if (m_bLive && m_LiveState == LiveState::Live)
+  {
+    Section(pBody, "Competition in the latest decision", AiColor(), {}, "same-category behaviors and the active one");
+    BuildCompetition(pBody, fWidth);
+  }
 
   GetBoard().SetEntryValue("Score.DimTint", plColor(Dim()));
   GetBoard().SetEntryValue("Score.MutedTint", plColor(Muted()));
 
   Recompute();
+  DrawSparklines();
 }
 
-void plQtAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, plUInt32 uiRows)
+void plAiScorePreviewView::BuildSource(plUiElement* pRoot, float fWidth)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  auto* pRow = Panel(pRoot);
+  Place(pRow, plRectFloat(0.0f, 0.0f, fWidth, s_fSourceRow));
+  pRow->m_Color = Plate();
+
+  auto* pEdge = Panel(pRow);
+  Place(pEdge, plRectFloat(0.0f, s_fSourceRow - 1.0f, fWidth, 1.0f));
+  pEdge->m_Color = Line();
+
+  const float fChip = 22.0f;
+  const float fY = (s_fSourceRow - fChip) * 0.5f;
+  float x = 10.0f;
+
+  AddChip(pRow, plRectFloat(x, fY, ChipWidth("Simulated", false), fChip), "Score.Simulated", "Simulated", !m_bLive, plColorGammaUB(0, 0, 0, 0), "Set the raw values with the sliders.", [this]()
+    { SetLive(false); });
+  x += ChipWidth("Simulated", false) + 6.0f;
+
+  AddChip(pRow, plRectFloat(x, fY, ChipWidth("Live agent", false), fChip), "Score.Live", "Live agent", m_bLive, plColorGammaUB(0, 0, 0, 0), "Read the values from the agent the AI Debugger of a simulating scene watches.", [this]()
+    { SetLive(true); });
+  x += ChipWidth("Live agent", false) + 6.0f;
+
+  if (!m_bLive)
+    return;
+
+  // at the right end: Copy to sliders, then the agent
+  const char* szCopy = "Copy to sliders";
+  const float fCopy = TextWidth(szCopy, FontSize - 2) + 20.0f;
+  float xr = fWidth - 10.0f - fCopy;
+  AddTextButton(pRow, plRectFloat(xr, fY, fCopy, fChip), "Score.Copy", szCopy, "Keep these values as the simulated situation.", [this]()
+    { CopyToSliders(); }, false, m_LiveState == LiveState::Live);
+
+  plStringBuilder sAgent = m_sLiveAgent.IsEmpty() ? plStringView("Pick agent") : m_sLiveAgent.GetView();
+  sAgent.Append(" \xE2\x96\xBE");
+  const float fAgent = plMath::Min(ChipWidth(sAgent, true), xr - x - 6.0f);
+  xr -= 6.0f + fAgent;
+  AddChip(pRow, plRectFloat(xr, fY, fAgent, fChip), "Score.Agent", sAgent, false, m_LiveState == LiveState::Live ? Danger() : Dim(), "The agent the values come from (the AI Debugger's watched agent).", [this]()
+    { ShowAgentMenu(); });
+}
+
+void plAiScorePreviewView::BuildCompetition(plUiElement* pBody, float fWidth)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  const plAiBehaviorAssetObject* pProps = m_pWindow->GetBehaviorDocument()->GetProperties();
+  const plString sThis = GetBehaviorName();
+
+  // this behavior's category, plus whatever runs
+  plHybridArray<const plAiDebugFrame::Behavior*, 8> rows;
+  for (const plAiDebugFrame::Behavior& behavior : m_LiveWatched.m_Behaviors)
+  {
+    if (behavior.m_uiCategory == pProps->m_Category.GetValue() || behavior.m_bActive)
+      rows.PushBack(&behavior);
+  }
+
+  rows.Sort([](const plAiDebugFrame::Behavior* a, const plAiDebugFrame::Behavior* b)
+    { return a->m_fScore > b->m_fScore; });
+
+  auto* pPanel = Panel(pBody);
+  pPanel->m_vOffsets.w = 8.0f + rows.GetCount() * 22.0f + 40.0f;
+  pPanel->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+  const float fName = plMath::Clamp(fWidth * 0.4f, 100.0f, 200.0f);
+  const float fBar = plMath::Max(fWidth - 20.0f - fName - 50.0f, 40.0f);
+
+  float y = 6.0f;
+  for (plUInt32 i = 0; i < rows.GetCount(); ++i)
+  {
+    const plAiDebugFrame::Behavior& behavior = *rows[i];
+    const bool bThis = behavior.m_sName == sThis;
+
+    auto* pStripe = Panel(pPanel);
+    Place(pStripe, plRectFloat(10.0f, y + 3.0f, 3.0f, 16.0f));
+    pStripe->m_Color = CategoryColor(behavior.m_uiCategory);
+
+    plStringBuilder sName = behavior.m_sName;
+    if (bThis)
+      sName.Append(" (this)");
+    if (behavior.m_bActive)
+      sName.Append(" \xC2\xB7 active");
+
+    Label(pPanel, plRectFloat(20.0f, y, fName - 12.0f, 22.0f), sName, bThis ? Foreground() : Muted(), FontSize - 2);
+
+    const plString sBar = Name("Score.Comp.", i, "");
+    AddDrawList(pPanel, plRectFloat(10.0f + fName, y + 6.0f, fBar, 10.0f), sBar);
+
+    plUiDrawListWriter writer;
+    const plRectFloat rect(0.0f, 0.0f, fBar, 10.0f);
+    writer.Rect(rect, Field(), 3.0f);
+    const float fFill = plMath::Saturate(behavior.m_fUtility);
+    if (fFill > 0.0f)
+      writer.Rect(plRectFloat(1.0f, 1.0f, (fBar - 2.0f) * fFill, 8.0f), bThis ? Accent() : Mix(Field(), Muted(), 0.5f), 2.0f);
+    Publish(GetBoard(), writer, sBar);
+
+    Label(pPanel, plRectFloat(fWidth - 46.0f, y, 36.0f, 22.0f), behavior.m_uiVeto != 0 ? plString("-") : FormatNumber(behavior.m_fUtility, 2), bThis ? Foreground() : Muted(), FontSize - 2, true)->m_HAlign = plUiTextHAlign::Right;
+    y += 22.0f;
+  }
+
+  // who wins, as the runtime decided
+  plStringBuilder sNote;
+  const plAiDebugFrame::Behavior* pWinner = (m_LiveWatched.m_iWinner >= 0 && m_LiveWatched.m_iWinner < static_cast<plInt32>(m_LiveWatched.m_Behaviors.GetCount())) ? &m_LiveWatched.m_Behaviors[m_LiveWatched.m_iWinner] : nullptr;
+  if (pWinner != nullptr && pWinner->m_sName == sThis)
+    sNote.SetFormat("{} won the latest decision ({}).", sThis, plAiDecisionOutcomeName(static_cast<plAiDecisionOutcome>(m_LiveWatched.m_uiOutcome)));
+  else if (pWinner != nullptr)
+    sNote.SetFormat("{} won the latest decision; the runtime scored this behavior {}.", pWinner->m_sName, plArgF(m_fLiveUtility, 2));
+  else
+    sNote = "No behavior won the latest decision.";
+
+  auto* pText = Label(pPanel, plRectFloat(10.0f, y + 6.0f, fWidth - 20.0f, 30.0f), sNote, Dim(), FontSize - 2);
+  pText->m_bWrap = true;
+  pText->m_VAlign = plUiTextVAlign::Top;
+}
+
+plString plAiScorePreviewView::GetBehaviorName() const
+{
+  // as the transform names the runtime descriptor
+  const plAiBehaviorAssetObject* pProps = m_pWindow->GetBehaviorDocument()->GetProperties();
+  if (!pProps->m_sName.IsEmpty())
+    return pProps->m_sName;
+
+  return plPathUtils::GetFileName(m_pWindow->GetBehaviorDocument()->GetDocumentPath());
+}
+
+void plAiScorePreviewView::SetLive(bool bLive)
+{
+  if (m_bLive == bLive)
+    return;
+
+  m_bLive = bLive;
+  m_LiveHistory.Clear();
+  m_uiLiveFrames = 0;
+  UpdateLive();
+  Invalidate();
+}
+
+void plAiScorePreviewView::OnTick(const plEditorUiServices::TickEvent& e)
+{
+  if (!m_bLive || e.m_Type != plEditorUiServices::TickEvent::Type::BeforeFrame)
+    return;
+
+  plUInt32 uiFrames = 0;
+  for (const plAiDebugSession* pSession : plAiDebugSession::GetSessions())
+    uiFrames += pSession->GetFrameCounter();
+
+  if (uiFrames == m_uiLiveFrames)
+    return;
+
+  m_uiLiveFrames = uiFrames;
+
+  if (UpdateLive())
+    Invalidate();
+}
+
+bool plAiScorePreviewView::UpdateLive()
+{
+  const LiveState previous = m_LiveState;
+  const plString sPreviousAgent = m_sLiveAgent;
+
+  m_LiveState = LiveState::NoScene;
+  m_sLiveAgent.Clear();
+
+  // the scene with a watched agent; the first one with data otherwise
+  const plAiDebugSession* pSession = nullptr;
+  for (const plAiDebugSession* pCandidate : plAiDebugSession::GetSessions())
+  {
+    if (!pCandidate->HasFrame())
+      continue;
+
+    if (pSession == nullptr || (pCandidate->GetWatched().IsValid() && !pSession->GetWatched().IsValid()))
+      pSession = pCandidate;
+  }
+
+  if (pSession != nullptr)
+  {
+    m_LiveState = LiveState::NoAgent;
+
+    for (const plAiDebugFrame::Agent& agent : pSession->GetFrame().m_Agents)
+    {
+      if (agent.m_Object == pSession->GetWatched())
+        m_sLiveAgent = agent.m_sName;
+    }
+
+    const plAiDebugFrame& frame = pSession->GetFrame();
+    if (!m_sLiveAgent.IsEmpty() && pSession->IsWorldStalled())
+    {
+      m_LiveState = LiveState::Stalled;
+    }
+    else if (!m_sLiveAgent.IsEmpty() && frame.m_bHasWatched && frame.m_Watched.m_Object == pSession->GetWatched())
+    {
+      m_LiveState = frame.m_Watched.m_bHasDecision ? LiveState::NoBehavior : LiveState::NoDecision;
+
+      const plString sThis = GetBehaviorName();
+      for (const plAiDebugFrame::Behavior& behavior : frame.m_Watched.m_Behaviors)
+      {
+        if (behavior.m_sName != sThis)
+          continue;
+
+        m_LiveState = LiveState::Live;
+        m_LiveWatched = frame.m_Watched;
+        m_fLiveUtility = behavior.m_fUtility;
+        m_bLiveActive = behavior.m_bActive;
+
+        m_LiveRaw.Clear();
+        m_LiveHistory.SetCount(behavior.m_Considerations.GetCount());
+
+        for (plUInt32 i = 0; i < behavior.m_Considerations.GetCount(); ++i)
+        {
+          m_LiveRaw.PushBack(behavior.m_Considerations[i].m_fRaw);
+
+          plHybridArray<float, 40>& history = m_LiveHistory[i];
+          if (history.GetCount() == 40)
+            history.RemoveAtAndCopy(0);
+          history.PushBack(behavior.m_Considerations[i].m_fValue);
+        }
+
+        break;
+      }
+    }
+  }
+
+  if (m_LiveState != LiveState::Live)
+  {
+    m_LiveRaw.Clear();
+    m_LiveHistory.Clear();
+  }
+
+  // a rebuild for every new decision: the rows and the competition change with it
+  return m_LiveState == LiveState::Live || previous != m_LiveState || sPreviousAgent != m_sLiveAgent;
+}
+
+void plAiScorePreviewView::ShowAgentMenu()
+{
+  // the agents of every scene with data, by name
+  struct Choice
+  {
+    plAiDebugSession* m_pSession = nullptr;
+    plUuid m_Object;
+  };
+
+  plHybridArray<Choice, 32> choices;
+  plEditorUiMenu menu;
+
+  for (plAiDebugSession* pSession : plAiDebugSession::GetSessions())
+  {
+    for (const plAiDebugFrame::Agent& agent : pSession->GetFrame().m_Agents)
+    {
+      plStringBuilder sLabel = agent.m_sName.IsEmpty() ? plStringView("(unnamed)") : agent.m_sName.GetView();
+      if (!agent.m_sActiveBehavior.IsEmpty())
+        sLabel.AppendFormat("  \xC2\xB7  {}", agent.m_sActiveBehavior);
+
+      plEditorUiMenuItem& item = menu.AddAction(sLabel, choices.GetCount());
+      item.m_bCheckable = true;
+      item.m_bChecked = agent.m_Object == pSession->GetWatched();
+
+      choices.PushBack({pSession, agent.m_Object});
+    }
+  }
+
+  if (choices.IsEmpty())
+  {
+    menu.AddAction("No agents: simulate a scene with AI agents", 0xFFFFFFFF);
+  }
+
+  ShowMenu("Score.Agent", menu, [this, choices](plUInt32 uiId)
+    {
+    if (uiId >= choices.GetCount())
+      return;
+
+    choices[uiId].m_pSession->SetWatched(choices[uiId].m_Object);
+    m_LiveHistory.Clear();
+    UpdateLive();
+    Invalidate(); });
+}
+
+void plAiScorePreviewView::CopyToSliders()
+{
+  const plAiBehaviorAssetObject* pProps = m_pWindow->GetBehaviorDocument()->GetProperties();
+
+  plUInt32 uiRow = 0;
+  for (const plAiConsiderationObject* pCons : pProps->m_Considerations)
+  {
+    if (pCons == nullptr || pCons->m_pInput == nullptr)
+      continue;
+
+    if (uiRow < m_LiveRaw.GetCount() && uiRow < m_SliderValues.GetCount())
+    {
+      const float fRange = pCons->m_fInputMax - pCons->m_fInputMin;
+      m_SliderValues[uiRow] = plMath::Abs(fRange) > 1e-6f ? plMath::Saturate((m_LiveRaw[uiRow] - pCons->m_fInputMin) / fRange) : 0.0f;
+    }
+
+    ++uiRow;
+  }
+
+  m_bRunning = m_bLiveActive;
+  SetLive(false);
+}
+
+void plAiScorePreviewView::DrawSparklines()
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  if (!m_bLive || m_LiveState != LiveState::Live)
+    return;
+
+  for (plUInt32 uiRow = 0; uiRow < m_LiveHistory.GetCount(); ++uiRow)
+  {
+    const plHybridArray<float, 40>& history = m_LiveHistory[uiRow];
+    const float fHeight = s_fScoreRow;
+
+    plUiDrawListWriter writer;
+    writer.Rect(plRectFloat(0.0f, 0.0f, m_fSparkWidth, fHeight), Field(), 3.0f);
+
+    if (history.GetCount() > 1)
+    {
+      plHybridArray<plVec2, 40> points;
+      for (plUInt32 i = 0; i < history.GetCount(); ++i)
+      {
+        const float x = 2.0f + (m_fSparkWidth - 4.0f) * i / 39.0f;
+        const float y = 2.0f + (fHeight - 4.0f) * (1.0f - plMath::Saturate(history[i]));
+        points.PushBack(plVec2(x, y));
+      }
+
+      writer.Polyline(points, AiColor(), 1.5f);
+    }
+
+    Publish(GetBoard(), writer, Name("Score.Spark.", uiRow, ""));
+  }
+}
+
+void plAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, plUInt32 uiRows)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -560,11 +954,20 @@ void plQtAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, pl
     Label(pSituation, plRectFloat(x, y, fName, s_fScoreRow), sName, Muted());
     x += fName + 8.0f;
 
-    const plUInt32 uiSlider = uiRow;
-    AddSlider(pSituation, plRectFloat(x, y, s_fSliderWidth, s_fScoreRow), Name("Score.Slider.", uiRow, ""), 0.0f, 1.0f, m_SliderValues[uiRow], {}, [this, uiSlider](float fValue)
-      {
-      m_SliderValues[uiSlider] = fValue;
-      Recompute(); });
+    // live: how the output moved over the last decisions; simulated: the slider
+    if (m_bLive)
+    {
+      m_fSparkWidth = s_fSliderWidth;
+      AddDrawList(pSituation, plRectFloat(x, y, s_fSliderWidth, s_fScoreRow), Name("Score.Spark.", uiRow, ""));
+    }
+    else
+    {
+      const plUInt32 uiSlider = uiRow;
+      AddSlider(pSituation, plRectFloat(x, y, s_fSliderWidth, s_fScoreRow), Name("Score.Slider.", uiRow, ""), 0.0f, 1.0f, m_SliderValues[uiRow], {}, [this, uiSlider](float fValue)
+        {
+        m_SliderValues[uiSlider] = fValue;
+        Recompute(); });
+    }
     x += s_fSliderWidth + 8.0f;
 
     TintedLabel(pSituation, plRectFloat(x, y, s_fRawWidth, s_fScoreRow), Name("Score.Raw.", uiRow, ""), "Score.DimTint", FontSize - 2, true)->m_HAlign = plUiTextHAlign::Right;
@@ -583,10 +986,17 @@ void plQtAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, pl
     y += s_fScoreRow + s_fScoreRowGap;
   }
 
+  // live values come with their running state; the options are for simulating
+  if (m_bLive)
+  {
+    pSituation->m_vOffsets.w -= ControlHeight + 4.0f;
+    return;
+  }
+
   BuildOptions(pSituation, fWidth, y + 4.0f);
 }
 
-void plQtAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, float fTop)
+void plAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, float fTop)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -600,7 +1010,7 @@ void plQtAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, flo
   AddNumberField(pPanel, plRectFloat(scale.x + fScaleLabel + 8.0f, scale.y, 64.0f, scale.height), "Score.Scale", FormatNumber(m_fWeightScale, 2), {}, "Simulates the WeightScale an archetype applies to this behavior.", [this](const plString& sText)
     {
     double fValue = 0.0;
-    if (ParseClamped(sText, 0.0, 10.0, fValue))
+    if (ParseClamped(sText, 0.0, 1.0, fValue))
       m_fWeightScale = static_cast<float>(fValue);
 
     Invalidate();
@@ -619,7 +1029,7 @@ void plQtAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, flo
     Recompute(); });
 }
 
-void plQtAiScorePreviewView::BuildResult(plUiElement* pBody, float fWidth)
+void plAiScorePreviewView::BuildResult(plUiElement* pBody, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -654,7 +1064,7 @@ void plQtAiScorePreviewView::BuildResult(plUiElement* pBody, float fWidth)
   pNote->m_VAlign = plUiTextVAlign::Top;
 }
 
-void plQtAiScorePreviewView::Recompute()
+void plAiScorePreviewView::Recompute()
 {
   if (!IsReady())
     return;
@@ -676,7 +1086,8 @@ void plQtAiScorePreviewView::Recompute()
       continue;
 
     const float t = uiRow < m_SliderValues.GetCount() ? m_SliderValues[uiRow] : 0.7f;
-    const float fRaw = plMath::Lerp(pCons->m_fInputMin, pCons->m_fInputMax, t);
+    const bool bLiveValue = m_bLive && uiRow < m_LiveRaw.GetCount();
+    const float fRaw = bLiveValue ? m_LiveRaw[uiRow] : plMath::Lerp(pCons->m_fInputMin, pCons->m_fInputMax, t);
 
     plCurve1D curve;
     plAiAssetUi::BuildRuntimeCurve(pCons->m_ResponseCurve, curve);
@@ -703,8 +1114,13 @@ void plQtAiScorePreviewView::Recompute()
     fCompensated = fProduct + ((1.0f - fProduct) * fProduct * fModification);
   }
 
-  float fUtility = plMath::Clamp(fCompensated * pProps->m_fWeight * m_fWeightScale, 0.0f, 1.0f);
-  if (m_bCooldown)
+  // a live agent brings its own running state; the cooldown and the archetype scale only apply to simulating
+  const bool bLive = m_bLive && m_LiveState == LiveState::Live;
+  const bool bCooldown = !bLive && m_bCooldown;
+  const bool bRunning = bLive ? m_bLiveActive : m_bRunning;
+
+  float fUtility = plMath::Clamp(fCompensated * pProps->m_fWeight * (bLive ? 1.0f : m_fWeightScale), 0.0f, 1.0f);
+  if (bCooldown)
     fUtility = 0.0f;
 
   const plInt32 iCategory = pProps->m_Category.GetValue();
@@ -714,7 +1130,7 @@ void plQtAiScorePreviewView::Recompute()
   board.SetEntryValue("Score.Product", FormatNumber(fProduct, 3));
   board.SetEntryValue("Score.Compensated", FormatNumber(fCompensated, 3));
   board.SetEntryValue("Score.Utility", FormatNumber(fUtility, 2));
-  board.SetEntryValue("Score.UtilityTint", plColor((bVetoed || m_bCooldown) ? Danger() : Foreground()));
+  board.SetEntryValue("Score.UtilityTint", plColor((bVetoed || bCooldown) ? Danger() : Foreground()));
   board.SetEntryValue("Score.Category", plString(sCategory));
   board.SetEntryValue("Score.CategoryTint", plColor(CategoryColor(iCategory)));
 
@@ -723,12 +1139,21 @@ void plQtAiScorePreviewView::Recompute()
   plColorGammaUB noteColor = Dim();
   float fCommitThreshold = -1.0f;
 
-  if (m_bCooldown)
+  if (bLive)
+  {
+    // the runtime's own number: it includes the archetype's weight scale and scoring version
+    sNote.SetFormat("the runtime scored {} in this decision{}", plArgF(m_fLiveUtility, 2), m_bLiveActive ? " - it is running" : "");
+    noteColor = Muted();
+
+    if (m_bLiveActive)
+      fCommitThreshold = plMath::Min(1.0f, m_fLiveUtility + pProps->m_fCommitBonus);
+  }
+  else if (bCooldown)
   {
     sNote = "cooldown veto - ScoreUtility returns 0 while TimeSinceDeactivation < Cooldown";
     noteColor = Danger();
   }
-  else if (m_bRunning)
+  else if (bRunning)
   {
     fCommitThreshold = plMath::Min(1.0f, fUtility + pProps->m_fCommitBonus);
     sNote.SetFormat("running: a challenger must beat {} + {} commit bonus to take over", plArgF(fUtility, 2), plArgF(pProps->m_fCommitBonus, 2));
@@ -747,10 +1172,10 @@ void plQtAiScorePreviewView::Recompute()
   board.SetEntryValue("Score.Note", plString(sNote));
   board.SetEntryValue("Score.NoteTint", plColor(noteColor));
 
-  DrawBar(fUtility, fCommitThreshold, bVetoed || m_bCooldown);
+  DrawBar(fUtility, fCommitThreshold, bVetoed || bCooldown);
 }
 
-void plQtAiScorePreviewView::DrawBar(float fUtility, float fCommitThreshold, bool bVetoed)
+void plAiScorePreviewView::DrawBar(float fUtility, float fCommitThreshold, bool bVetoed)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;

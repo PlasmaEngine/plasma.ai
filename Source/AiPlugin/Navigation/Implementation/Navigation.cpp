@@ -77,7 +77,8 @@ void plAiNavigation::Update()
         break;
 
       case State::NoPathFound:
-        if (m_uiCurrentPositionChangedBit || m_uiTargetPositionChangedBit)
+        // a changed navmesh (a door opened, a sector finished building) may have a path now
+        if (m_uiCurrentPositionChangedBit || m_uiTargetPositionChangedBit || m_pNavmesh->GetNavMeshGeneration() != m_uiSearchNavMeshGeneration)
           m_State = State::StartNewSearch;
         break;
 
@@ -318,6 +319,18 @@ void plAiNavigation::ComputeAllWaypoints(plDynamicArray<plVec3>& out_waypoints) 
   }
 }
 
+void plAiNavigation::SetNoPathFound()
+{
+  if (m_pNavmesh->GetNavMeshGeneration() != m_uiSearchNavMeshGeneration)
+  {
+    // tiles were added or removed during the search, which may be why it failed
+    m_State = State::StartNewSearch;
+    return;
+  }
+
+  m_State = State::NoPathFound;
+}
+
 bool plAiNavigation::UpdatePathSearch()
 {
   if (m_State == State::StartNewSearch)
@@ -354,6 +367,8 @@ bool plAiNavigation::UpdatePathSearch()
     }
 
     m_vPathSearchTargetPos = m_vTargetPosition;
+    m_uiSearchNavMeshGeneration = m_pNavmesh->GetNavMeshGeneration();
+
     if (dtStatusFailed(m_Query.initSlicedFindPath(startRef, m_PathSearchTargetPoly, plRcPos(m_vCurrentPosition), plRcPos(m_vTargetPosition), m_pFilter)))
     {
       m_State = State::NoPathFound;
@@ -379,7 +394,7 @@ bool plAiNavigation::UpdatePathSearch()
 
     if (dtStatusFailed(res))
     {
-      m_State = State::NoPathFound;
+      SetNoPathFound();
       return false;
     }
 
@@ -388,8 +403,7 @@ bool plAiNavigation::UpdatePathSearch()
 
     if (dtStatusFailed(m_Query.finalizeSlicedFindPath(resultPolys, &iPathCorridorLength, (int)MaxPathNodes)))
     {
-      m_State = State::NoPathFound;
-      PL_REPORT_FAILURE("Detour: finalizeSlicedFindPath failed.");
+      SetNoPathFound();
       return false;
     }
 
@@ -441,14 +455,18 @@ void plAiNavigation::DebugDrawPathCorridor(const plDebugRendererContext& context
   plHybridArray<plDebugRenderer::Triangle, 64> tris;
 
   const auto pNavmesh = m_Query.getAttachedNavMesh();
+  if (pNavmesh == nullptr)
+    return;
 
   for (plUInt32 c = 0; c < uiCorrLen; ++c)
   {
     dtPolyRef poly = pCorrArr[c];
 
-    const dtMeshTile* pTile;
-    const dtPoly* pPoly;
-    pNavmesh->getTileAndPolyByRef(poly, &pTile, &pPoly);
+    // a failed agent keeps its corridor, whose tiles may have been rebuilt or unloaded since
+    const dtMeshTile* pTile = nullptr;
+    const dtPoly* pPoly = nullptr;
+    if (dtStatusFailed(pNavmesh->getTileAndPolyByRef(poly, &pTile, &pPoly)))
+      continue;
 
     for (plUInt32 i = 2; i < pPoly->vertCount; ++i)
     {

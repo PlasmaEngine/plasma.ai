@@ -7,6 +7,15 @@
 
 using plAiBehaviorResourceHandle = plTypedResourceHandle<class plAiBehaviorResource>;
 
+/// \brief How one consideration evaluated, for debugging tools.
+struct PL_AIPLUGIN_DLL plAiConsiderationTrace
+{
+  const plRTTI* m_pInputType = nullptr; ///< nullptr for an unconfigured consideration, which scores 1
+  float m_fRaw = 0.0f;                  ///< the input's value
+  float m_fNormalized = 0.0f;           ///< mapped onto [0,1] by the input range
+  float m_fValue = 1.0f;                ///< after the response curve; the factor the utility product uses
+};
+
 /// \brief One consideration of a utility behavior: an input, a normalization range and a response curve.
 ///
 /// Scoring: raw = input->Evaluate(), x = saturate((raw - min) / (max - min)), utility = curve(x).
@@ -23,7 +32,7 @@ struct PL_AIPLUGIN_DLL plAiConsiderationDesc
   void PrepareCurve();
 
   /// \brief Evaluates this consideration for the given context. Returns a score in [0,1].
-  float Evaluate(const plAiScoringContext& context) const;
+  float Evaluate(const plAiScoringContext& context, plAiConsiderationTrace* out_pTrace = nullptr) const;
 };
 
 /// \brief Everything that defines one reusable utility AI behavior.
@@ -37,7 +46,7 @@ struct PL_AIPLUGIN_DLL plAiBehaviorResourceDescriptor
   plHashedString m_sName;
   plEnum<plAiBehaviorCategory> m_Category;
   float m_fWeight = 1.0f;      ///< scales the final utility within the category
-  float m_fCommitBonus = 0.2f; ///< how much better a candidate must score to replace this behavior while it is active
+  float m_fCommitBonus = 0.2f; ///< how much better a candidate of the same category must score to replace this behavior while it is active
   plTime m_CooldownDuration;   ///< after deactivation, the behavior scores zero for this long
 
   plDynamicArray<plAiConsiderationDesc> m_Considerations;

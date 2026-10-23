@@ -38,6 +38,9 @@ public:
   MemberID RegisterMember(const plHashedString& sSquadId, plComponentHandle hAgentComponent);
   void UnregisterMember(MemberID id);
 
+  /// \brief How many active members the squad has; 0 for unknown squads.
+  plUInt32 GetSquadSize(const plTempHashedString& sSquadId) const;
+
   /// \brief Re-reads the squad settings from the AI plugin config file.
   void ReloadSquadConfig();
 
@@ -62,7 +65,7 @@ private:
     float m_fExposure = 0.0f;
     float m_fCoverStatus = 0.0f;
     bool m_bHasBlackboard = false;
-    plUInt8 m_uiBoundGroup = 0; ///< bounding overwatch group (0/1), assigned round-robin on join
+    plUInt8 m_uiBoundGroup = 0; ///< bounding overwatch group (0/1); a new member joins the smaller one
   };
 
   struct Squad
@@ -71,8 +74,10 @@ private:
     bool m_bInUse = false;
     plHybridArray<MemberID, 8> m_Members;
 
-    plUInt8 m_uiPeakSize = 0;
-    plUInt8 m_uiLosses = 0;
+    /// Members lost since the squad was last at full strength: a finished retreat and reinforcements reset both, so a
+    /// squad only retreats again after new losses.
+    plUInt16 m_uiPeakSize = 0;
+    plUInt16 m_uiLosses = 0;
 
     plEnum<plAiSquadIntent> m_Intent;
     plTime m_IntentSince;
@@ -88,6 +93,7 @@ private:
     plUInt8 m_uiMovingGroup = 0; ///< which bound group currently moves (Advance intent)
     plTime m_LastBoundSwap;
     plVec3 m_vSharedMovePos = plVec3::MakeZero(); ///< squad-level destination (retreat rally point)
+    plTime m_RallyChosenFor = plTime::MakeFromSeconds(-1.0); ///< m_IntentSince of the retreat the rally point belongs to
 
     plTime m_NextTick;
   };

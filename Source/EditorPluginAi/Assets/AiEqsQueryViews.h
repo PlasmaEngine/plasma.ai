@@ -7,17 +7,17 @@
 
 class plAiEqsTest;
 class plAiEqsTestObject;
-class plQtAiEqsQueryAssetDocumentWindow;
+class plAiEqsQueryAssetDocumentWindow;
 
 /// \brief The engine-drawn "EQS Query" dock: header, context strip, generator card, test cards and a status row.
 ///
-/// Every edit goes through the window's document operations, so undo steps and the live link are the ones of the
-/// Qt cards.
-class plQtAiEqsQueryView : public plQtAiEngineView
+/// Every edit goes through the window's document operations, which keep the undo steps and the live link to the
+/// engine process.
+class plAiEqsQueryView : public plAiEngineView
 {
 public:
-  plQtAiEqsQueryView(plQtAiEqsQueryAssetDocumentWindow* pWindow);
-  ~plQtAiEqsQueryView();
+  plAiEqsQueryView(plAiEqsQueryAssetDocumentWindow* pWindow);
+  ~plAiEqsQueryView();
 
 protected:
   virtual void BuildContent(plUiPanel* pRoot, const plVec2& vSize) override;
@@ -43,7 +43,7 @@ private:
   /// A searchable menu of the concrete types derived from pBaseType, grouped by getCategory.
   void ShowTypeMenu(plStringView sAnchor, const plRTTI* pBaseType, plStringView sPlaceholder, std::function<plString(const plRTTI*)> getCategory, std::function<void(const plRTTI*)> onPick);
 
-  plQtAiEqsQueryAssetDocumentWindow* m_pWindow = nullptr;
+  plAiEqsQueryAssetDocumentWindow* m_pWindow = nullptr;
   plHybridArray<const plRTTI*, 32> m_MenuTypes;
   plHybridArray<plString, 8> m_MenuChoices;
 };
@@ -53,11 +53,11 @@ private:
 ///
 /// The querier, the threat and both occluder ends can be dragged; clicking a candidate shows its breakdown. The
 /// query runs locally (plAiEqsPreviewSimulation) on every change.
-class plQtAiEqsPreviewView : public plQtAiEngineView
+class plAiEqsPreviewView : public plAiEngineView
 {
 public:
-  plQtAiEqsPreviewView(plQtAiEqsQueryAssetDocumentWindow* pWindow);
-  ~plQtAiEqsPreviewView();
+  plAiEqsPreviewView(plAiEqsQueryAssetDocumentWindow* pWindow);
+  ~plAiEqsPreviewView();
 
   /// Runs the query again and redraws (properties or the situation changed).
   void Recompute();
@@ -77,7 +77,7 @@ private:
   plVec2 ToScreen(const plVec2& vMeters) const;
   plVec2 ToMeters(const plVec2& vLocal) const;
 
-  plQtAiEqsQueryAssetDocumentWindow* m_pWindow = nullptr;
+  plAiEqsQueryAssetDocumentWindow* m_pWindow = nullptr;
   plAiEqsPreviewSimulation m_Simulation;
   plInt32 m_iSelected = -1;
   bool m_bAllowDrag = true;

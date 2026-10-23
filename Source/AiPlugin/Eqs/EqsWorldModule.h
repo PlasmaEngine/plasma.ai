@@ -8,7 +8,18 @@
 
 class plAiNavMesh;
 class plAiTacticalWorldModule;
+struct plAiEqsCapture;
 class plPhysicsWorldModuleInterface;
+
+/// \brief What the EQS scheduler did in its last update, for status displays.
+struct plAiEqsFrameStats
+{
+  plUInt32 m_uiExecuted = 0;  ///< queries that ran this frame
+  plUInt32 m_uiSuspended = 0; ///< of those, suspended on the raycast or path budget
+  plUInt32 m_uiQueued = 0;    ///< waiting for a later frame
+  plUInt32 m_uiTimedOut = 0;  ///< since the world started
+  plUInt32 m_uiRaycasts = 0;  ///< this frame
+};
 
 /// \brief The Environment Query System: budgeted, asynchronous execution of data-driven spatial
 /// queries (plAiEqsQueryResource assets).
@@ -17,10 +28,12 @@ class plPhysicsWorldModuleInterface;
 /// (generate -> cheap tests -> budgeted expensive tests -> finalize) runs in a parallel batch at
 /// the end of the frame, results are readable the NEXT frame via TryGetResult (poll while
 /// Pending). A query whose expensive phase exhausts its raycast/path budget suspends and resumes
-/// next frame at the exact test+item index instead of degrading result quality.
+/// at the exact test+item index instead of degrading result quality. Pending queries run in FIFO
+/// order, resumed ones queue behind new submissions, and a query still pending after
+/// AI.EQS.MaxQueryAge completes as TimedOut.
 ///
-/// Call ReleaseQuery when done - unreleased queries are reclaimed automatically after a few
-/// seconds, but holding slots is wasteful.
+/// Call ReleaseQuery when done; releasing a pending query cancels it. Unreleased queries are
+/// reclaimed automatically after a few seconds, but holding slots is wasteful.
 class PL_AIPLUGIN_DLL plAiEqsWorldModule final : public plWorldModule
 {
   PL_DECLARE_WORLD_MODULE();
@@ -40,8 +53,21 @@ public:
   bool TryGetResult(QueryID id, plAiEqsQueryResult& out_result) const;
   void ReleaseQuery(QueryID id);
 
+  /// \brief Records the next query that completes for the given querier, or for any querier when the handle is invalid.
+  void CaptureNextQuery(const plGameObjectHandle& hQuerier);
+
+  /// \brief Whether a capture is armed and waiting for a query.
+  bool IsCaptureArmed() const { return m_bCaptureArmed; }
+
+  /// \brief The most recent capture, or nullptr before the first one.
+  const plAiEqsCapture* GetLastCapture() const { return m_pLastCapture.Borrow(); }
+
+  /// \brief What the query scheduler did in its last update, for status displays.
+  plAiEqsFrameStats GetFrameStats() const;
+
 private:
   friend class plAiEqsQueryTestComponent;
+  friend struct plAiEqsWorldModuleTestAccess; // AiSemanticsTests: queues queries without a built navmesh
 
   void UpdateExecute(const UpdateContext& ctxt); // PostAsync, after brain apply / tactical execute / squads
 
@@ -59,6 +85,9 @@ private:
     plDynamicArray<plAiEqsItem> m_DiscardedDebug; // bounded by the query's candidate limit
 
     plVec3 m_vQuerier = plVec3::MakeZero();
+    plVec3 m_vGeneratorCenter = plVec3::MakeZero();
+    plUInt32 m_uiResourceChangeCounter = 0; // a different counter on resume means the asset was reloaded
+    plUInt32 m_uiSelectSeed = 0;            // the seed the result selection used (captures replay it)
     plAiNavMesh* m_pNavMesh = nullptr;
     const dtQueryFilter* m_pFilter = nullptr;
 
@@ -88,10 +117,15 @@ private:
   void FreeSlot(plUInt32 uiSlot);
   void SweepQuerySlots();
 
+  void CompleteQuery(QuerySlot& slot, plAiEqsQueryResult::Status status);
+  void RestartQuery(QuerySlot& slot); // after the asset was reloaded: the tests and generator were replaced
+  void PreparePendingQueries();       // drops timed-out queries, restarts reloaded ones
+
   void ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiScratchIndex); // worker; EqsExecution.cpp
-  void FinalizeQuery(QuerySlot& slot);                                // worker; EqsExecution.cpp
+  void FinalizeQuery(QuerySlot& slot, plUInt32 uiSeed);               // worker; EqsExecution.cpp
 
   void RetainDebugQuery(const QuerySlot& slot);
+  void RecordCapture(const QuerySlot& slot);
   void DrawQueryVisualization();
   void DrawStats();
 
@@ -129,9 +163,14 @@ private:
 
   plDeque<DebugQuery> m_DebugQueries;
 
+  bool m_bCaptureArmed = false;
+  plGameObjectHandle m_hCaptureQuerier;
+  plUniquePtr<plAiEqsCapture> m_pLastCapture;
+
   // stats
   plUInt32 m_uiStatQueriesExecuted = 0;
   plUInt32 m_uiStatQueriesSuspended = 0;
   plUInt32 m_uiStatQueriesSubmitted = 0;
+  plUInt32 m_uiStatQueriesTimedOut = 0; // since the world started
   plAtomicInteger32 m_uiStatRaycastsThisFrame;
 };

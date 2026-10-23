@@ -169,7 +169,8 @@ bool plAiNavigationComponent::PrepareQueryObject()
     m_Query.SetQueryFilter(pNavMeshModule->GetPathSearchFilter(m_sPathSearchConfig));
   }
 
-  return true;
+  // a navmesh config name the project doesn't have yields no navmesh
+  return m_Query.GetNavmesh() != nullptr;
 }
 
 bool plAiNavigationComponent::EnsureNavMeshSectorAvailable(const plVec3& vCenter, float fRadius)
@@ -384,10 +385,46 @@ void plAiNavigationComponent::Update()
   }
 }
 
+void plAiNavigationComponent::SubmitIdleToCrowd(const plTransform& transform)
+{
+  if (!m_bCrowdAvoidance || !cvar_AiCrowdEnable)
+    return;
+
+  if (m_pCrowdModule == nullptr)
+  {
+    m_pCrowdModule = GetWorld()->GetOrCreateModule<plAiCrowdWorldModule>();
+  }
+
+  if (m_CrowdAgentID == plAiCrowdWorldModule::InvalidAgentID)
+  {
+    m_CrowdAgentID = m_pCrowdModule->RegisterAgent();
+  }
+
+  plAiCrowdAgentState agentState;
+  agentState.m_vPosition = transform.m_vPosition;
+  agentState.m_fRadius = m_fAgentRadius;
+  agentState.m_fMaxSpeed = m_fSpeed;
+  agentState.m_Quality = m_AvoidanceQuality;
+  agentState.m_bObstacleOnly = true;
+
+  m_pCrowdModule->SubmitAgentState(m_CrowdAgentID, agentState);
+  m_vCrowdVelocity.SetZero();
+}
+
 void plAiNavigationComponent::Steer(plTransform& transform, float tDiff)
 {
+  m_bCrowdSteered = false;
+
   if (m_State != plAiNavigationComponentState::Moving)
+  {
+    // standing agents are obstacles, else the moving ones walk through them
+    if (m_State == plAiNavigationComponentState::Idle || m_State == plAiNavigationComponentState::Failed || m_State == plAiNavigationComponentState::Turning)
+    {
+      SubmitIdleToCrowd(transform);
+    }
+
     return;
+  }
 
   if (plAiNavMeshWorldModule* pNavMeshModule = GetWorld()->GetOrCreateModule<plAiNavMeshWorldModule>())
   {
@@ -508,6 +545,7 @@ void plAiNavigationComponent::Steer(plTransform& transform, float tDiff)
       // override only the position integration; rotation keeps facing the corridor waypoint,
       // so avoidance side-steps read as strafing
       m_Steering.m_vPosition = transform.m_vPosition + m_vCrowdVelocity * tDiff;
+      m_bCrowdSteered = true;
     }
     else
     {
@@ -563,6 +601,14 @@ void plAiNavigationComponent::StartLinkTraversal(dtPolyRef linkPoly)
 
   if (plAiNavMeshWorldModule* pNavMeshModule = GetWorld()->GetModule<plAiNavMeshWorldModule>())
   {
+    if (!pNavMeshModule->HasNavLink(uiUserID))
+    {
+      // the link was removed and its tile hasn't rebuilt yet: the way it offered is gone
+      CancelNavigation();
+      m_State = plAiNavigationComponentState::Failed;
+      return;
+    }
+
     m_TraversingLinkType = pNavMeshModule->GetNavLinkType(uiUserID);
 
     plComponent* pLinkComponent = nullptr;
@@ -674,7 +720,8 @@ void plAiNavigationComponent::ApplyMovement(const plTransform& transform, float 
       }
       else if (m_State == plAiNavigationComponentState::Moving)
       {
-        MapVelocityToCharacterInput(m_Steering.m_vDesiredVelocity, tDiff);
+        // the character follows the avoidance velocity like the other modes follow the avoided position
+        MapVelocityToCharacterInput(m_bCrowdSteered ? m_vCrowdVelocity : m_Steering.m_vDesiredVelocity, tDiff);
       }
 
       break;
