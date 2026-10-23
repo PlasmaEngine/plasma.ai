@@ -1,7 +1,7 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Assets/AiArchetypeAsset.h>
-#include <EditorPluginAi/Assets/AiArchetypeAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiArchetypeAssetWindow.h>
 #include <EditorPluginAi/Assets/AiArchetypeViews.h>
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
 
@@ -78,22 +78,22 @@ namespace
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiArchetypeStackView
+// plAiArchetypeStackView
 
-plQtAiArchetypeStackView::plQtAiArchetypeStackView(plQtAiArchetypeAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiArchetypeStack")
+plAiArchetypeStackView::plAiArchetypeStackView(plAiArchetypeAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiArchetypeStack")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiArchetypeStackView::~plQtAiArchetypeStackView() = default;
+plAiArchetypeStackView::~plAiArchetypeStackView() = default;
 
-bool plQtAiArchetypeStackView::IsRebuildBlocked() const
+bool plAiArchetypeStackView::IsRebuildBlocked() const
 {
   return m_pWindow->GetDocument()->GetCommandHistory()->IsInTransaction();
 }
 
-void plQtAiArchetypeStackView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiArchetypeStackView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -150,7 +150,7 @@ void plQtAiArchetypeStackView::BuildContent(plUiPanel* pRoot, const plVec2& vSiz
   }
 }
 
-float plQtAiArchetypeStackView::BuildHeader(plUiElement* pRoot, float fWidth)
+float plAiArchetypeStackView::BuildHeader(plUiElement* pRoot, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -224,7 +224,7 @@ float plQtAiArchetypeStackView::BuildHeader(plUiElement* pRoot, float fWidth)
   return fHeight + 1.0f;
 }
 
-void plQtAiArchetypeStackView::BuildRow(plUiElement* pBody, float fWidth, plUInt32 uiIndex, const plUuid& guid, const plAiBehaviorPeek& peek, plStringView sReference, float fWeightScale)
+void plAiArchetypeStackView::BuildRow(plUiElement* pBody, float fWidth, plUInt32 uiIndex, const plUuid& guid, const plAiBehaviorPeek& peek, plStringView sReference, float fWeightScale)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -236,7 +236,7 @@ void plQtAiArchetypeStackView::BuildRow(plUiElement* pBody, float fWidth, plUInt
   pRow->m_Color = bSelected ? Selection() : plColorGammaUB(0, 0, 0, 0);
 
   // the row selects; its tooltip tells where the asset is
-  const plStringBuilder sTooltip = peek.m_bValid ? plStringBuilder(peek.m_sAbsPath.toUtf8().data()) : plStringBuilder("The referenced behavior asset could not be resolved.");
+  const plStringBuilder sTooltip = peek.m_bValid ? plStringBuilder(peek.m_sAbsPath) : plStringBuilder("The referenced behavior asset could not be resolved.");
   plUiButton* pHit = AddClickArea(pRow, plRectFloat(0, 0, fWidth, s_fRowHeight), Name("Row.", uiIndex, ""), sTooltip, [this, guid]()
     { m_pWindow->SelectBehaviorRow(guid); });
   Fill(pHit);
@@ -253,7 +253,7 @@ void plQtAiArchetypeStackView::BuildRow(plUiElement* pBody, float fWidth, plUInt
   // name, base weight and this archetype's scale
   plStringBuilder sName;
   if (peek.m_bValid)
-    sName = peek.m_sName.toUtf8().data();
+    sName = peek.m_sName;
   else
     sName = sReference.IsEmpty() ? plStringView("<no behavior set>") : sReference;
 
@@ -324,22 +324,22 @@ void plQtAiArchetypeStackView::BuildRow(plUiElement* pBody, float fWidth, plUInt
 }
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiPerceptionView
+// plAiPerceptionView
 
-plQtAiPerceptionView::plQtAiPerceptionView(plQtAiArchetypeAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiArchetypePerception")
+plAiPerceptionView::plAiPerceptionView(plAiArchetypeAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiArchetypePerception")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiPerceptionView::~plQtAiPerceptionView() = default;
+plAiPerceptionView::~plAiPerceptionView() = default;
 
-bool plQtAiPerceptionView::IsRebuildBlocked() const
+bool plAiPerceptionView::IsRebuildBlocked() const
 {
   return m_pWindow->GetDocument()->GetCommandHistory()->IsInTransaction();
 }
 
-void plQtAiPerceptionView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiPerceptionView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -399,7 +399,7 @@ void plQtAiPerceptionView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   BuildPeek(pBody, fWidth);
 }
 
-void plQtAiPerceptionView::DrawTimeline(float fWidth, float fHeight)
+void plAiPerceptionView::DrawTimeline(float fWidth, float fHeight)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -475,7 +475,7 @@ void plQtAiPerceptionView::DrawTimeline(float fWidth, float fHeight)
   Publish(GetBoard(), writer, "Perception.Timeline");
 }
 
-float plQtAiPerceptionView::BuildPeek(plUiElement* pBody, float fWidth)
+float plAiPerceptionView::BuildPeek(plUiElement* pBody, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -525,7 +525,7 @@ float plQtAiPerceptionView::BuildPeek(plUiElement* pBody, float fWidth)
   else
   {
     // the name and its tags, then category, weight, commit and logic
-    const plStringBuilder sName(pPeek->m_sName.toUtf8().data());
+    const plStringBuilder sName(pPeek->m_sName);
     const float fName = TextWidth(sName);
     writer.Text(plRectFloat(10.0f, y, fName, s_fPeekLine), sName, Foreground(), FontSize - 1);
 
@@ -540,7 +540,7 @@ float plQtAiPerceptionView::BuildPeek(plUiElement* pBody, float fWidth)
     y += s_fPeekLine;
 
     plStringBuilder sSummary;
-    sSummary.SetFormat("{} \xC2\xB7 weight {} \xC2\xB7 commit {} \xC2\xB7 {}", plAiAssetUi::CategoryName(pPeek->m_iCategory), plArgF(pPeek->m_fWeight, 2), plArgF(pPeek->m_fCommitBonus, 2), pPeek->m_sLogic.isEmpty() ? "no logic" : pPeek->m_sLogic.toUtf8().data());
+    sSummary.SetFormat("{} \xC2\xB7 weight {} \xC2\xB7 commit {} \xC2\xB7 {}", plAiAssetUi::CategoryName(pPeek->m_iCategory), plArgF(pPeek->m_fWeight, 2), plArgF(pPeek->m_fCommitBonus, 2), pPeek->m_sLogic.IsEmpty() ? plStringView("no logic") : pPeek->m_sLogic.GetView());
     writer.Text(plRectFloat(10.0f, y, fTextWidth, s_fPeekLine), sSummary, CategoryColor(pPeek->m_iCategory), FontSize - 2, plUiTextHAlign::Left, plUiTextVAlign::Center, true);
     y += s_fPeekLine;
 
@@ -550,7 +550,7 @@ float plQtAiPerceptionView::BuildPeek(plUiElement* pBody, float fWidth)
       DrawCurve(writer, plRectFloat(10.0f, y + 2.0f, 48.0f, 24.0f), &cons.m_Curve, cons.m_bLegacyCurveDomain, false);
 
       plStringBuilder sLabel;
-      sLabel.SetFormat("{} [{} \xE2\x86\x92 {}]", cons.m_sLabel.toUtf8().data(), cons.m_fInputMin, cons.m_fInputMax);
+      sLabel.SetFormat("{} [{} \xE2\x86\x92 {}]", cons.m_sLabel, cons.m_fInputMin, cons.m_fInputMax);
       writer.Text(plRectFloat(66.0f, y, fTextWidth - 56.0f, s_fPeekCurveRow), sLabel, Muted(), FontSize - 1);
       y += s_fPeekCurveRow;
     }

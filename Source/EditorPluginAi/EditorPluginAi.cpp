@@ -3,9 +3,11 @@
 #include <EditorFramework/Actions/AssetActions.h>
 #include <EditorFramework/Actions/CommonAssetActions.h>
 #include <EditorFramework/Actions/ProjectActions.h>
+#include <AiPlugin/Navigation/NavigationConfig.h>
 #include <EditorFramework/EngineShell/WindowContent.h>
 #include <EditorPluginAi/Actions/AiActions.h>
-#include <EditorPluginAi/Dialogs/AiProjectSettingsDlg.moc.h>
+#include <EditorUi/Widgets.h>
+#include <Foundation/Configuration/Plugin.h>
 #include <GuiFoundation/Action/ActionMapManager.h>
 #include <GuiFoundation/Action/CommandHistoryActions.h>
 #include <GuiFoundation/Action/DocumentActions.h>
@@ -16,6 +18,29 @@
 #include <GuiFoundation/UIServices/DynamicStringEnum.h>
 
 static void ToolsProjectEventHandler(const plToolsProjectEvent& e);
+
+/// The package's icon folder: the icons under their ids (":/AssetIcons/AiBehavior.svg" is
+/// "EditorIcons/AssetIcons/AiBehavior.svg"). The plugin binary lives in <package>/Bin/<configuration>.
+static plString s_sIconFolder;
+
+static void RegisterIconFolder()
+{
+  plStringBuilder sPlugin, sCopy;
+  plPlugin::GetPluginPaths("plEditorPluginAi", sPlugin, sCopy, 0);
+
+  plStringBuilder sFolder = sPlugin.GetFileDirectory();
+  sFolder.AppendPath("..", "..", "EditorIcons");
+  sFolder.MakeCleanPath();
+
+  s_sIconFolder = sFolder;
+  plEditorUi::AddIconFolder(s_sIconFolder);
+}
+
+static void UnregisterIconFolder()
+{
+  plEditorUi::RemoveIconFolder(s_sIconFolder);
+  s_sIconFolder.Clear();
+}
 
 // The AI editors in the engine shell: the main view gets the width; the preview and Raw Properties share the right
 // column, one above the other, as both follow the selection.
@@ -69,6 +94,8 @@ static void RegisterAiAssetActionMaps(const char* szAssetName)
 
 void OnLoadPlugin()
 {
+  RegisterIconFolder();
+
   plToolsProject::GetSingleton()->s_Events.AddEventHandler(ToolsProjectEventHandler);
 
   plAiActions::RegisterActions();
@@ -80,19 +107,21 @@ void OnLoadPlugin()
   // after the asset menu bars exist, which also get the Ai Project Settings entry
   plAiActions::MapMenuActions();
 
-  plQtWindowContentProvider::SetDefaultArrangement("AiArchetype", &ArrangeAiArchetype);
-  plQtWindowContentProvider::SetDefaultArrangement("AiBehavior", &ArrangeAiBehavior);
-  plQtWindowContentProvider::SetDefaultArrangement("AiEqsQuery", &ArrangeAiEqsQuery);
+  plWindowContentProvider::SetDefaultArrangement("AiArchetype", &ArrangeAiArchetype);
+  plWindowContentProvider::SetDefaultArrangement("AiBehavior", &ArrangeAiBehavior);
+  plWindowContentProvider::SetDefaultArrangement("AiEqsQuery", &ArrangeAiEqsQuery);
 }
 
 void OnUnloadPlugin()
 {
-  plQtWindowContentProvider::SetDefaultArrangement("AiArchetype", nullptr);
-  plQtWindowContentProvider::SetDefaultArrangement("AiBehavior", nullptr);
-  plQtWindowContentProvider::SetDefaultArrangement("AiEqsQuery", nullptr);
+  plWindowContentProvider::SetDefaultArrangement("AiArchetype", nullptr);
+  plWindowContentProvider::SetDefaultArrangement("AiBehavior", nullptr);
+  plWindowContentProvider::SetDefaultArrangement("AiEqsQuery", nullptr);
 
   plAiActions::UnregisterActions();
   plToolsProject::GetSingleton()->s_Events.RemoveEventHandler(ToolsProjectEventHandler);
+
+  UnregisterIconFolder();
 }
 
 PL_PLUGIN_ON_LOADED()

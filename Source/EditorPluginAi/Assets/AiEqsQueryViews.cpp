@@ -2,7 +2,7 @@
 
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
 #include <EditorPluginAi/Assets/AiEqsQueryAsset.h>
-#include <EditorPluginAi/Assets/AiEqsQueryAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiEqsQueryAssetWindow.h>
 #include <EditorPluginAi/Assets/AiEqsQueryViews.h>
 
 #include <AiPlugin/Eqs/EqsContext.h>
@@ -66,22 +66,22 @@ namespace
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiEqsQueryView
+// plAiEqsQueryView
 
-plQtAiEqsQueryView::plQtAiEqsQueryView(plQtAiEqsQueryAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiEqsQuery")
+plAiEqsQueryView::plAiEqsQueryView(plAiEqsQueryAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiEqsQuery")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiEqsQueryView::~plQtAiEqsQueryView() = default;
+plAiEqsQueryView::~plAiEqsQueryView() = default;
 
-bool plQtAiEqsQueryView::IsRebuildBlocked() const
+bool plAiEqsQueryView::IsRebuildBlocked() const
 {
   return m_pWindow->GetDocument()->GetCommandHistory()->IsInTransaction();
 }
 
-void plQtAiEqsQueryView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiEqsQueryView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
 
@@ -111,7 +111,7 @@ void plQtAiEqsQueryView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   BuildStatus(pRoot);
 }
 
-float plQtAiEqsQueryView::BuildHeader(plUiElement* pRoot, float fWidth)
+float plAiEqsQueryView::BuildHeader(plUiElement* pRoot, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -188,7 +188,7 @@ float plQtAiEqsQueryView::BuildHeader(plUiElement* pRoot, float fWidth)
   return fHeight + 1.0f;
 }
 
-float plQtAiEqsQueryView::BuildContexts(plUiElement* pRoot, float fTop, float fWidth)
+float plAiEqsQueryView::BuildContexts(plUiElement* pRoot, float fTop, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -265,7 +265,7 @@ float plQtAiEqsQueryView::BuildContexts(plUiElement* pRoot, float fTop, float fW
   return fHeight + 1.0f;
 }
 
-void plQtAiEqsQueryView::BuildGenerator(plUiElement* pBody, float fWidth)
+void plAiEqsQueryView::BuildGenerator(plUiElement* pBody, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -319,7 +319,7 @@ void plQtAiEqsQueryView::BuildGenerator(plUiElement* pBody, float fWidth)
 
     if (pGenerator == nullptr)
     {
-      // no generator: a read-only well, as the disabled Qt spin boxes were
+      // no generator: a read-only well
       auto* pWell = Panel(pCard);
       Place(pWell, rect);
       pWell->m_Color = Field();
@@ -364,7 +364,7 @@ void plQtAiEqsQueryView::BuildGenerator(plUiElement* pBody, float fWidth)
   pCard->m_vOffsets.w = y + s_fSummaryLine + 8.0f;
 }
 
-void plQtAiEqsQueryView::BuildTestsSection(plUiElement* pBody)
+void plAiEqsQueryView::BuildTestsSection(plUiElement* pBody)
 {
   using namespace plAiEngineUi;
 
@@ -419,7 +419,7 @@ namespace
   }
 } // namespace
 
-void plQtAiEqsQueryView::BuildTestCard(plUiElement* pBody, float fWidth, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiEqsTestObject* pNative)
+void plAiEqsQueryView::BuildTestCard(plUiElement* pBody, float fWidth, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiEqsTestObject* pNative)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -461,7 +461,7 @@ void plQtAiEqsQueryView::BuildTestCard(plUiElement* pBody, float fWidth, plUInt3
   pCard->m_vOffsets.w = y + 6.0f + 1.0f;
 }
 
-void plQtAiEqsQueryView::BuildTestIdentity(plUiElement* pCard, plAiFlowLayout& ref_flow, const plAiEqsTest* pTest)
+void plAiEqsQueryView::BuildTestIdentity(plUiElement* pCard, plAiFlowLayout& ref_flow, const plAiEqsTest* pTest)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -495,7 +495,7 @@ void plQtAiEqsQueryView::BuildTestIdentity(plUiElement* pCard, plAiFlowLayout& r
   }
 }
 
-void plQtAiEqsQueryView::BuildTestTools(plUiElement* pCard, plAiFlowLayout& ref_flow, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiEqsTestObject* pNative, bool bSelected)
+void plAiEqsQueryView::BuildTestTools(plUiElement* pCard, plAiFlowLayout& ref_flow, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiEqsTestObject* pNative, bool bSelected)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -575,7 +575,7 @@ void plQtAiEqsQueryView::BuildTestTools(plUiElement* pCard, plAiFlowLayout& ref_
     { m_pWindow->RemoveTest(guid); });
 }
 
-float plQtAiEqsQueryView::BuildTestFilters(plUiElement* pCard, float fWidth, float fTop, plUInt32 uiIndex, const plUuid& guid, const plAiEqsTest* pTest)
+float plAiEqsQueryView::BuildTestFilters(plUiElement* pCard, float fWidth, float fTop, plUInt32 uiIndex, const plUuid& guid, const plAiEqsTest* pTest)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -640,7 +640,7 @@ float plQtAiEqsQueryView::BuildTestFilters(plUiElement* pCard, float fWidth, flo
   return line.GetBottom();
 }
 
-void plQtAiEqsQueryView::BuildStatus(plUiElement* pRoot)
+void plAiEqsQueryView::BuildStatus(plUiElement* pRoot)
 {
   const plAiEqsQueryAssetObject* pProps = m_pWindow->GetEqsDocument()->GetProperties();
 
@@ -664,7 +664,7 @@ void plQtAiEqsQueryView::BuildStatus(plUiElement* pRoot)
   GetBoard().SetEntryValue("Eqs.StatusRight", sRight);
 }
 
-void plQtAiEqsQueryView::ShowRunModeMenu()
+void plAiEqsQueryView::ShowRunModeMenu()
 {
   const plInt32 iCurrent = m_pWindow->GetEqsDocument()->GetProperties()->m_RunMode.GetValue();
 
@@ -680,7 +680,7 @@ void plQtAiEqsQueryView::ShowRunModeMenu()
     { m_pWindow->SetRootValue("RunMode", plVariant(s_RunModeValues[uiId]), "Change Run Mode"); });
 }
 
-void plQtAiEqsQueryView::ShowNavmeshMenu()
+void plAiEqsQueryView::ShowNavmeshMenu()
 {
   const plString& sCurrent = m_pWindow->GetEqsDocument()->GetProperties()->m_sNavmeshConfig;
 
@@ -708,7 +708,7 @@ void plQtAiEqsQueryView::ShowNavmeshMenu()
       m_pWindow->SetRootValue("NavmeshConfig", plVariant(m_MenuChoices[uiId].GetData()), "Change Navmesh Config"); });
 }
 
-void plQtAiEqsQueryView::ShowAroundMenu()
+void plAiEqsQueryView::ShowAroundMenu()
 {
   const plAiEqsGenerator* pGenerator = m_pWindow->GetEqsDocument()->GetProperties()->m_pGenerator;
   if (pGenerator == nullptr)
@@ -745,7 +745,7 @@ void plQtAiEqsQueryView::ShowAroundMenu()
       m_pWindow->SetGeneratorValue("CenterContext", plVariant(m_MenuChoices[uiId].GetData()), "Change Generator Center"); });
 }
 
-void plQtAiEqsQueryView::ShowConditionMenu(plStringView sAnchor, const plUuid& guid)
+void plAiEqsQueryView::ShowConditionMenu(plStringView sAnchor, const plUuid& guid)
 {
   const plAiEqsTestObject* pNative = nullptr;
   {
@@ -783,7 +783,7 @@ void plQtAiEqsQueryView::ShowConditionMenu(plStringView sAnchor, const plUuid& g
     { m_pWindow->SetTestProperty(guid, "FilterCondition", plVariant(static_cast<plInt64>(uiId))); });
 }
 
-void plQtAiEqsQueryView::ShowMissingDataMenu(plStringView sAnchor, const plUuid& guid)
+void plAiEqsQueryView::ShowMissingDataMenu(plStringView sAnchor, const plUuid& guid)
 {
   plEditorUiMenu menu;
   for (plUInt32 i = 0; i < PL_ARRAY_SIZE(s_szMissingData); ++i)
@@ -793,7 +793,7 @@ void plQtAiEqsQueryView::ShowMissingDataMenu(plStringView sAnchor, const plUuid&
     { m_pWindow->SetTestProperty(guid, "MissingDataPolicy", plVariant(static_cast<plInt64>(uiId))); });
 }
 
-void plQtAiEqsQueryView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
+void plAiEqsQueryView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
 {
   plEditorUiMenu menu;
 
@@ -816,7 +816,7 @@ void plQtAiEqsQueryView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
       m_pWindow->ApplyCurvePreset(guid, uiId); });
 }
 
-void plQtAiEqsQueryView::ShowTypeMenu(plStringView sAnchor, const plRTTI* pBaseType, plStringView sPlaceholder, std::function<plString(const plRTTI*)> getCategory, std::function<void(const plRTTI*)> onPick)
+void plAiEqsQueryView::ShowTypeMenu(plStringView sAnchor, const plRTTI* pBaseType, plStringView sPlaceholder, std::function<plString(const plRTTI*)> getCategory, std::function<void(const plRTTI*)> onPick)
 {
   m_MenuTypes.Clear();
   plDynamicArray<plEditorUiSearchMenuItem> items;
@@ -843,7 +843,7 @@ void plQtAiEqsQueryView::ShowTypeMenu(plStringView sAnchor, const plRTTI* pBaseT
 }
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiEqsPreviewView
+// plAiEqsPreviewView
 
 namespace
 {
@@ -856,15 +856,15 @@ namespace
   constexpr float s_fCandidateSlack = 7.0f;
 } // namespace
 
-plQtAiEqsPreviewView::plQtAiEqsPreviewView(plQtAiEqsQueryAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiEqsQueryPreview")
+plAiEqsPreviewView::plAiEqsPreviewView(plAiEqsQueryAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiEqsQueryPreview")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiEqsPreviewView::~plQtAiEqsPreviewView() = default;
+plAiEqsPreviewView::~plAiEqsPreviewView() = default;
 
-plUInt32 plQtAiEqsPreviewView::GetTestRowCount() const
+plUInt32 plAiEqsPreviewView::GetTestRowCount() const
 {
   plUInt32 uiRows = 0;
   for (const plAiEqsTestObject* pTestObj : m_pWindow->GetEqsDocument()->GetProperties()->m_Tests)
@@ -876,7 +876,7 @@ plUInt32 plQtAiEqsPreviewView::GetTestRowCount() const
   return uiRows;
 }
 
-void plQtAiEqsPreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiEqsPreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -956,7 +956,7 @@ void plQtAiEqsPreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   Recompute();
 }
 
-void plQtAiEqsPreviewView::Recompute()
+void plAiEqsPreviewView::Recompute()
 {
   if (!IsReady())
     return;
@@ -972,7 +972,7 @@ void plQtAiEqsPreviewView::Recompute()
   DrawBreakdown();
 }
 
-void plQtAiEqsPreviewView::UpdateThreatDistance()
+void plAiEqsPreviewView::UpdateThreatDistance()
 {
   const float fDistance = (m_Simulation.m_vThreat - m_Simulation.m_vQuerier).GetLength();
   SetSliderValue("Prev.Distance", plMath::Clamp(fDistance, 1.0f, 25.0f));
@@ -982,7 +982,7 @@ void plQtAiEqsPreviewView::UpdateThreatDistance()
   GetBoard().SetEntryValue("Prev.DistanceText", plString(sText));
 }
 
-void plQtAiEqsPreviewView::SetThreatDistance(float fDistance)
+void plAiEqsPreviewView::SetThreatDistance(float fDistance)
 {
   // the threat moves along its current direction from the querier
   plVec2 vDir = m_Simulation.m_vThreat - m_Simulation.m_vQuerier;
@@ -993,20 +993,20 @@ void plQtAiEqsPreviewView::SetThreatDistance(float fDistance)
   Recompute();
 }
 
-plVec2 plQtAiEqsPreviewView::ToScreen(const plVec2& vMeters) const
+plVec2 plAiEqsPreviewView::ToScreen(const plVec2& vMeters) const
 {
   // a 15 m half extent, Y up
   const float fScale = plMath::Min(m_ScatterRect.width, m_ScatterRect.height) / 30.0f;
   return plVec2(m_ScatterRect.width * 0.5f + vMeters.x * fScale, m_ScatterRect.height * 0.5f - vMeters.y * fScale);
 }
 
-plVec2 plQtAiEqsPreviewView::ToMeters(const plVec2& vLocal) const
+plVec2 plAiEqsPreviewView::ToMeters(const plVec2& vLocal) const
 {
   const float fScale = plMath::Max(plMath::Min(m_ScatterRect.width, m_ScatterRect.height) / 30.0f, 0.001f);
   return plVec2((vLocal.x - m_ScatterRect.width * 0.5f) / fScale, (m_ScatterRect.height * 0.5f - vLocal.y) / fScale);
 }
 
-void plQtAiEqsPreviewView::DrawScatter()
+void plAiEqsPreviewView::DrawScatter()
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -1090,7 +1090,7 @@ void plQtAiEqsPreviewView::DrawScatter()
   Publish(GetBoard(), writer, "Prev.Scatter");
 }
 
-void plQtAiEqsPreviewView::DrawLegend()
+void plAiEqsPreviewView::DrawLegend()
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -1130,7 +1130,7 @@ void plQtAiEqsPreviewView::DrawLegend()
   Publish(GetBoard(), writer, "Prev.Legend");
 }
 
-void plQtAiEqsPreviewView::DrawBreakdown()
+void plAiEqsPreviewView::DrawBreakdown()
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -1232,7 +1232,7 @@ void plQtAiEqsPreviewView::DrawBreakdown()
   Publish(GetBoard(), writer, "Prev.Breakdown");
 }
 
-void plQtAiEqsPreviewView::OnViewPointer(const plEditorUiPointerEvent& e)
+void plAiEqsPreviewView::OnViewPointer(const plEditorUiPointerEvent& e)
 {
   using Type = plEditorUiPointerEvent::Type;
 

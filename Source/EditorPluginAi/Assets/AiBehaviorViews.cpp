@@ -1,7 +1,7 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
-#include <EditorPluginAi/Assets/AiBehaviorAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiBehaviorAssetWindow.h>
 #include <EditorPluginAi/Assets/AiBehaviorViews.h>
 #include <EditorPluginAi/Assets/AiEditorHelpers.h>
 
@@ -60,22 +60,22 @@ namespace
 } // namespace
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiBehaviorView
+// plAiBehaviorView
 
-plQtAiBehaviorView::plQtAiBehaviorView(plQtAiBehaviorAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiBehavior")
+plAiBehaviorView::plAiBehaviorView(plAiBehaviorAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiBehavior")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiBehaviorView::~plQtAiBehaviorView() = default;
+plAiBehaviorView::~plAiBehaviorView() = default;
 
-bool plQtAiBehaviorView::IsRebuildBlocked() const
+bool plAiBehaviorView::IsRebuildBlocked() const
 {
   return m_pWindow->GetDocument()->GetCommandHistory()->IsInTransaction();
 }
 
-void plQtAiBehaviorView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiBehaviorView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -121,7 +121,7 @@ void plQtAiBehaviorView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   }
 }
 
-float plQtAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
+float plAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -198,7 +198,7 @@ float plQtAiBehaviorView::BuildHeader(plUiElement* pRoot, float fWidth)
   return fHeight + 1.0f;
 }
 
-float plQtAiBehaviorView::BuildLogicRow(plUiElement* pRoot, float fTop, float fWidth)
+float plAiBehaviorView::BuildLogicRow(plUiElement* pRoot, float fTop, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -266,7 +266,7 @@ float plQtAiBehaviorView::BuildLogicRow(plUiElement* pRoot, float fTop, float fW
   return fHeight + 1.0f;
 }
 
-void plQtAiBehaviorView::BuildConsiderationCard(plUiElement* pBody, float fWidth, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiConsiderationObject* pNative)
+void plAiBehaviorView::BuildConsiderationCard(plUiElement* pBody, float fWidth, plUInt32 uiIndex, plUInt32 uiCount, const plUuid& guid, const plAiConsiderationObject* pNative)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -387,7 +387,7 @@ void plQtAiBehaviorView::BuildConsiderationCard(plUiElement* pBody, float fWidth
   pCard->m_vOffsets.w = y + 6.0f + 1.0f;
 }
 
-void plQtAiBehaviorView::ShowCategoryMenu()
+void plAiBehaviorView::ShowCategoryMenu()
 {
   const plInt32 iCurrent = m_pWindow->GetBehaviorDocument()->GetProperties()->m_Category.GetValue();
 
@@ -403,7 +403,7 @@ void plQtAiBehaviorView::ShowCategoryMenu()
     { m_pWindow->SetRootValue("Category", plVariant(static_cast<plInt32>(uiId)), "Change Category"); });
 }
 
-void plQtAiBehaviorView::ShowLogicMenu()
+void plAiBehaviorView::ShowLogicMenu()
 {
   const plInt32 iCurrent = GetLogicType(m_pWindow->GetBehaviorDocument()->GetProperties());
 
@@ -419,15 +419,15 @@ void plQtAiBehaviorView::ShowLogicMenu()
     { m_pWindow->ChangeLogicType(static_cast<plInt32>(uiId)); });
 }
 
-void plQtAiBehaviorView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
+void plAiBehaviorView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
 {
   plEditorUiMenu menu;
 
   plEditorUiMenuItem& presets = menu.AddSubmenu("Presets");
-  for (plUInt32 i = 0; i < plQtAiBehaviorAssetDocumentWindow::GetCurvePresetCount(); ++i)
+  for (plUInt32 i = 0; i < plAiBehaviorAssetDocumentWindow::GetCurvePresetCount(); ++i)
   {
     plEditorUiMenuItem& item = presets.m_Children.ExpandAndGetRef();
-    item.m_sLabel = plQtAiBehaviorAssetDocumentWindow::GetCurvePresetName(i);
+    item.m_sLabel = plAiBehaviorAssetDocumentWindow::GetCurvePresetName(i);
     item.m_uiId = i;
   }
 
@@ -442,7 +442,7 @@ void plQtAiBehaviorView::ShowCurveMenu(plStringView sAnchor, const plUuid& guid)
       m_pWindow->ApplyCurvePreset(guid, uiId); });
 }
 
-void plQtAiBehaviorView::ShowAddMenu(plStringView sAnchor)
+void plAiBehaviorView::ShowAddMenu(plStringView sAnchor)
 {
   m_MenuTypes.Clear();
   plDynamicArray<plEditorUiSearchMenuItem> items;
@@ -472,7 +472,7 @@ void plQtAiBehaviorView::ShowAddMenu(plStringView sAnchor)
 }
 
 //////////////////////////////////////////////////////////////////////////
-// plQtAiScorePreviewView
+// plAiScorePreviewView
 
 namespace
 {
@@ -484,21 +484,21 @@ namespace
   constexpr float s_fBarHeight = 18.0f;
 } // namespace
 
-plQtAiScorePreviewView::plQtAiScorePreviewView(plQtAiBehaviorAssetDocumentWindow* pWindow)
-  : plQtAiEngineView("AiScorePreview")
+plAiScorePreviewView::plAiScorePreviewView(plAiBehaviorAssetDocumentWindow* pWindow)
+  : plAiEngineView("AiScorePreview")
   , m_pWindow(pWindow)
 {
 }
 
-plQtAiScorePreviewView::~plQtAiScorePreviewView() = default;
+plAiScorePreviewView::~plAiScorePreviewView() = default;
 
-void plQtAiScorePreviewView::ResetSliders()
+void plAiScorePreviewView::ResetSliders()
 {
   m_SliderValues.Clear();
   Invalidate();
 }
 
-void plQtAiScorePreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
+void plAiScorePreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -531,7 +531,7 @@ void plQtAiScorePreviewView::BuildContent(plUiPanel* pRoot, const plVec2& vSize)
   Recompute();
 }
 
-void plQtAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, plUInt32 uiRows)
+void plAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, plUInt32 uiRows)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -586,7 +586,7 @@ void plQtAiScorePreviewView::BuildSituation(plUiElement* pBody, float fWidth, pl
   BuildOptions(pSituation, fWidth, y + 4.0f);
 }
 
-void plQtAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, float fTop)
+void plAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, float fTop)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -619,7 +619,7 @@ void plQtAiScorePreviewView::BuildOptions(plUiElement* pPanel, float fWidth, flo
     Recompute(); });
 }
 
-void plQtAiScorePreviewView::BuildResult(plUiElement* pBody, float fWidth)
+void plAiScorePreviewView::BuildResult(plUiElement* pBody, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
@@ -654,7 +654,7 @@ void plQtAiScorePreviewView::BuildResult(plUiElement* pBody, float fWidth)
   pNote->m_VAlign = plUiTextVAlign::Top;
 }
 
-void plQtAiScorePreviewView::Recompute()
+void plAiScorePreviewView::Recompute()
 {
   if (!IsReady())
     return;
@@ -750,7 +750,7 @@ void plQtAiScorePreviewView::Recompute()
   DrawBar(fUtility, fCommitThreshold, bVetoed || m_bCooldown);
 }
 
-void plQtAiScorePreviewView::DrawBar(float fUtility, float fCommitThreshold, bool bVetoed)
+void plAiScorePreviewView::DrawBar(float fUtility, float fCommitThreshold, bool bVetoed)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;

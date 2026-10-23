@@ -1,47 +1,26 @@
 #pragma once
 
 #include <AiPlugin/UtilityAI/Decision/AiScoring.h>
+#include <Foundation/Strings/String.h>
 #include <Foundation/Time/Timestamp.h>
 #include <Foundation/Tracks/Curve1D.h>
-
-#include <QColor>
-#include <QRectF>
-#include <QString>
 
 class plAiInput;
 class plAiConsiderationObject;
 class plSingleCurveData;
 class plRTTI;
 class plStringBuilder;
-class QPainter;
 
 /// \brief Shared helpers for the custom AI asset editor UIs.
-///
-/// All colors are sourced from plColorScheme so the AI editors automatically match the AI
-/// category accents used for components, sliders and icons everywhere else in the editor.
 namespace plAiAssetUi
 {
-  /// \brief The AI category accent (plColorScheme::GetCategoryColor("AI") - pastel dusty rose).
-  QColor AccentColor();
-
-  /// \brief A dimmed variant of the accent for borders / selection rails.
-  QColor AccentColorDim();
-
-  /// \brief The color used to draw response curves (scheme blue).
-  QColor CurveColor();
-
-  /// \brief Ladder color for a plAiBehaviorCategory value (plColorScheme::LightUI).
-  QColor CategoryColor(plInt32 iCategory);
-
   /// \brief Display name for a plAiBehaviorCategory value.
   const char* CategoryName(plInt32 iCategory);
 
   /// \brief "plAiInput_DistanceToTarget" -> "Distance To Target".
-  QString PrettyInputName(const plRTTI* pRtti);
   void GetPrettyInputName(const plRTTI* pRtti, plStringBuilder& out_sName);
 
   /// \brief Short one-line summary of an input's configuration ("'Ai_CoverStatus'", "matches Retreat", ...).
-  QString InputParamSummary(const plAiInput* pInput);
   void GetInputParamSummary(const plAiInput* pInput, plStringBuilder& out_sSummary);
 
   /// \brief The Add Consideration menu group of an input type: "Target", "Blackboard", "Timing", "Tactical", "Squad" or "Misc".
@@ -60,15 +39,12 @@ namespace plAiAssetUi
   /// \brief Combines consideration outputs into the final utility, mirroring plAiUtilityEvaluator::ScoreUtility
   /// (product with veto, n-axis compensation, weight scaling, clamp).
   float ComposeUtility(plArrayPtr<const float> considerationValues, float fWeight, float fWeightScale);
-
-  /// \brief Paints a curve into the given rect (grid + curve). A null/empty curve draws the identity diagonal.
-  void PaintCurve(QPainter& p, const QRectF& rect, const plCurve1D* pCurve, const QColor& curveColor, bool bLegacyDomain = false);
 } // namespace plAiAssetUi
 
 /// \brief One consideration of a referenced behavior asset, for read-only display.
 struct plAiBehaviorPeekConsideration
 {
-  QString m_sLabel;
+  plString m_sLabel;
   float m_fInputMin = 0.0f;
   float m_fInputMax = 1.0f;
   bool m_bNeedsTarget = false;
@@ -83,9 +59,9 @@ struct plAiBehaviorPeekConsideration
 struct plAiBehaviorPeek
 {
   bool m_bValid = false;
-  QString m_sName;
-  QString m_sAbsPath;
-  QString m_sLogic;
+  plString m_sName;
+  plString m_sAbsPath;
+  plString m_sLogic;
   plInt32 m_iCategory = plAiBehaviorCategory::Default;
   float m_fWeight = 1.0f;
   float m_fCommitBonus = 0.2f;

@@ -12,7 +12,7 @@ class plAiEqsGenerator;
 class plRTTI;
 class plStringBuilder;
 
-/// \brief Names, summaries and curve presets shared by the Qt and the engine-drawn EQS editors.
+/// \brief Names, summaries and curve presets of the engine-drawn EQS editor.
 namespace plAiEqsUi
 {
   /// "plAiEqsTest_LineOfSight" -> "Line Of Sight" (also generators and contexts); "<none>" for null.

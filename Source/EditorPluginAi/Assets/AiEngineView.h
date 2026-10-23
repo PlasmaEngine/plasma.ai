@@ -129,9 +129,9 @@ private:
 /// values. Text and number fields commit once per edit, on Enter or when focus leaves them (W5-D5); a field that
 /// has focus keeps its text and focus across a rebuild.
 ///
-/// A view is an editor UI content: the window's dock shows it in a plQtEngineUiContentWidget, which the engine shell
-/// lends, so the shell shows the same view in the document's frame.
-class plQtAiEngineView : public plEditorUiContent
+/// A view is an editor UI content: the window owns it as a panel (plDocumentWindow::AddPanel), which the engine shell
+/// shows in the document's frame.
+class plAiEngineView : public plEditorUiContent
 {
 public:
   using Action = std::function<void()>;
@@ -139,8 +139,8 @@ public:
   using PickAction = std::function<void(plUInt32)>;
   using ValueAction = std::function<void(float)>;
 
-  explicit plQtAiEngineView(const char* szName);
-  ~plQtAiEngineView();
+  explicit plAiEngineView(const char* szName);
+  ~plAiEngineView();
 
   /// Rebuilds the document in the next UI frame.
   void Invalidate();

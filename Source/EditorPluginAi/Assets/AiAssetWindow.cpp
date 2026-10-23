@@ -1,102 +1,51 @@
 #include <EditorPluginAi/EditorPluginAiPCH.h>
 
 #include <EditorFramework/Assets/AssetCurator.h>
-#include <EditorFramework/Assets/AssetStatusIndicator.moc.h>
 #include <EditorPluginAi/Assets/AiArchetypeAsset.h>
-#include <EditorPluginAi/Assets/AiAssetWindow.moc.h>
+#include <EditorPluginAi/Assets/AiAssetWindow.h>
 #include <EditorPluginAi/Assets/AiBehaviorAsset.h>
 #include <EditorPluginAi/Assets/AiEqsQueryAsset.h>
 #include <Foundation/Utilities/AssetFileHeader.h>
-#include <Foundation/Utilities/CommandLineUtils.h>
-#include <GuiFoundation/ActionViews/MenuBarActionMapView.moc.h>
-#include <GuiFoundation/ActionViews/ToolBarActionMapView.moc.h>
-#include <GuiFoundation/PropertyGrid/PropertyGridWidget.moc.h>
 
-#include <QBoxLayout>
-#include <QMouseEvent>
-#include <QTimer>
-
-plQtAiCurveButton::plQtAiCurveButton(QWidget* pParent)
-  : QLabel(pParent)
-{
-  setAutoFillBackground(true);
-  setCursor(Qt::PointingHandCursor);
-  setScaledContents(true);
-}
-
-void plQtAiCurveButton::mouseReleaseEvent(QMouseEvent* pEvent)
-{
-  Q_EMIT clicked();
-}
-
-plQtAiAssetDocumentWindow::plQtAiAssetDocumentWindow(plDocument* pDocument, const char* szUniqueName, const char* szResourceType)
-  : plQtDocumentWindow(pDocument)
+plAiAssetDocumentWindow::plAiAssetDocumentWindow(plDocument* pDocument, const char* szUniqueName, const char* szResourceType)
+  : plDocumentWindow(pDocument)
 {
   m_sUniqueName = szUniqueName;
   m_sResourceType = szResourceType;
 
-  GetDocument()->GetObjectManager()->m_PropertyEvents.AddEventHandler(plMakeDelegate(&plQtAiAssetDocumentWindow::PropertyEventHandler, this));
-  GetDocument()->GetObjectManager()->m_StructureEvents.AddEventHandler(plMakeDelegate(&plQtAiAssetDocumentWindow::StructureEventHandler, this));
+  GetDocument()->GetObjectManager()->m_PropertyEvents.AddEventHandler(plMakeDelegate(&plAiAssetDocumentWindow::PropertyEventHandler, this));
+  GetDocument()->GetObjectManager()->m_StructureEvents.AddEventHandler(plMakeDelegate(&plAiAssetDocumentWindow::StructureEventHandler, this));
 
   plStringBuilder sMapping;
 
-  // Menu Bar
-  {
-    sMapping.SetFormat("{}MenuBar", m_sUniqueName);
-    plQtMenuBarActionMapView* pMenuBar = static_cast<plQtMenuBarActionMapView*>(menuBar());
-    plActionContext context;
-    context.m_sMapping = sMapping;
-    context.m_pDocument = pDocument;
-    context.m_pWindow = this;
-    pMenuBar->SetActionContext(context);
-  }
+  sMapping.SetFormat("{}MenuBar", m_sUniqueName);
+  SetMenuBarActions(sMapping);
 
-  // Tool Bar
-  {
-    sMapping.SetFormat("{}ToolBar", m_sUniqueName);
-    plQtToolBarActionMapView* pToolBar = new plQtToolBarActionMapView("Toolbar", this);
-    plActionContext context;
-    context.m_sMapping = sMapping;
-    context.m_pDocument = pDocument;
-    context.m_pWindow = this;
-    pToolBar->SetActionContext(context);
-
-    sMapping.SetFormat("{}WindowToolBar", m_sUniqueName);
-    pToolBar->setObjectName(sMapping.GetData());
-    addToolBar(pToolBar);
-  }
+  sMapping.SetFormat("{}ToolBar", m_sUniqueName);
+  SetToolBarActions(sMapping);
 }
 
-plQtAiAssetDocumentWindow::~plQtAiAssetDocumentWindow()
+plAiAssetDocumentWindow::~plAiAssetDocumentWindow()
 {
-  GetDocument()->GetObjectManager()->m_PropertyEvents.RemoveEventHandler(plMakeDelegate(&plQtAiAssetDocumentWindow::PropertyEventHandler, this));
-  GetDocument()->GetObjectManager()->m_StructureEvents.RemoveEventHandler(plMakeDelegate(&plQtAiAssetDocumentWindow::StructureEventHandler, this));
+  m_Timers.StopAll();
+
+  GetDocument()->GetObjectManager()->m_PropertyEvents.RemoveEventHandler(plMakeDelegate(&plAiAssetDocumentWindow::PropertyEventHandler, this));
+  GetDocument()->GetObjectManager()->m_StructureEvents.RemoveEventHandler(plMakeDelegate(&plAiAssetDocumentWindow::StructureEventHandler, this));
 
   RestoreResource();
 }
 
-bool plQtAiAssetDocumentWindow::IsEngineUiEnabled()
+void plAiAssetDocumentWindow::AddRawPropertiesPanel(plStringView sPanelId)
 {
-  return plCommandLineUtils::GetGlobalInstance()->GetBoolOption("-engineAiEditors", true);
+  plEditorUiDockPanelDesc desc;
+  desc.m_sId = sPanelId;
+  desc.m_sTitle = "Raw Properties";
+  desc.m_Role = plEditorUiDockRole::Right;
+
+  AddPropertiesPanel(desc);
 }
 
-QWidget* plQtAiAssetDocumentWindow::CreateRawPropertiesWidget(QWidget* pParent)
-{
-  plQtPropertyGridWidget* pPropertyGrid = new plQtPropertyGridWidget(pParent, GetDocument());
-
-  QWidget* pWidget = new QWidget(pParent);
-  pWidget->setObjectName("Group");
-  pWidget->setLayout(new QVBoxLayout());
-  pWidget->setContentsMargins(0, 0, 0, 0);
-
-  pWidget->layout()->setContentsMargins(0, 0, 0, 0);
-  pWidget->layout()->addWidget(new plQtAssetStatusIndicator((plAssetDocument*)GetDocument()));
-  pWidget->layout()->addWidget(pPropertyGrid);
-
-  return pWidget;
-}
-
-void plQtAiAssetDocumentWindow::UpdatePreview()
+void plAiAssetDocumentWindow::UpdatePreview()
 {
   if (plEditorEngineProcessConnection::GetSingleton()->IsProcessCrashed())
     return;
@@ -146,7 +95,7 @@ void plQtAiAssetDocumentWindow::UpdatePreview()
   }
 }
 
-void plQtAiAssetDocumentWindow::RestoreResource()
+void plAiAssetDocumentWindow::RestoreResource()
 {
   plRestoreResourceMsgToEngine msg;
   msg.m_sResourceType = m_sResourceType;
@@ -157,13 +106,13 @@ void plQtAiAssetDocumentWindow::RestoreResource()
   plEditorEngineProcessConnection::GetSingleton()->SendMessage(&msg);
 }
 
-void plQtAiAssetDocumentWindow::PropertyEventHandler(const plDocumentObjectPropertyEvent& e)
+void plAiAssetDocumentWindow::PropertyEventHandler(const plDocumentObjectPropertyEvent& e)
 {
   UpdatePreview();
   QueueUiRefresh(false);
 }
 
-void plQtAiAssetDocumentWindow::StructureEventHandler(const plDocumentObjectStructureEvent& e)
+void plAiAssetDocumentWindow::StructureEventHandler(const plDocumentObjectStructureEvent& e)
 {
   switch (e.m_EventType)
   {
@@ -185,7 +134,7 @@ void plQtAiAssetDocumentWindow::StructureEventHandler(const plDocumentObjectStru
   }
 }
 
-void plQtAiAssetDocumentWindow::QueueUiRefresh(bool bStructure)
+void plAiAssetDocumentWindow::QueueUiRefresh(bool bStructure)
 {
   m_bStructureChanged |= bStructure;
 
@@ -193,10 +142,11 @@ void plQtAiAssetDocumentWindow::QueueUiRefresh(bool bStructure)
     return;
 
   m_bRefreshQueued = true;
-  QTimer::singleShot(0, this, SLOT(FlushUiRefresh()));
+  m_Timers.Start(plTime::MakeZero(), [this]()
+    { FlushUiRefresh(); });
 }
 
-void plQtAiAssetDocumentWindow::FlushUiRefresh()
+void plAiAssetDocumentWindow::FlushUiRefresh()
 {
   m_bRefreshQueued = false;
   const bool bStructure = m_bStructureChanged;
