@@ -2,9 +2,11 @@
 
 #include <AiPlugin/AiPluginDLL.h>
 #include <AiPlugin/Eqs/EqsQueryResource.h>
+#include <AiPlugin/Tactical/ThreatMap.h>
 #include <Core/World/WorldModule.h>
 #include <DetourNavMeshQuery.h>
 #include <Foundation/Threading/AtomicInteger.h>
+#include <Foundation/Types/SharedPtr.h>
 
 class plAiNavMesh;
 class plAiTacticalWorldModule;
@@ -90,6 +92,7 @@ private:
     plUInt32 m_uiSelectSeed = 0;            // the seed the result selection used (captures replay it)
     plAiNavMesh* m_pNavMesh = nullptr;
     const dtQueryFilter* m_pFilter = nullptr;
+    plSharedPtr<const plAiThreatSnapshot> m_pThreat; // the querier team's threat map at submit
 
     enum class Phase : plUInt8
     {

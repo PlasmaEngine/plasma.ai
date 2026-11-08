@@ -34,6 +34,12 @@ private:
   static void UpdateWatch(plEngineProcessDocumentContext* pContext, plWorld* pWorld, const plAiDebugRequest& request, plComponentHandle& out_hAgent);
   static void FillWatched(plEngineProcessDocumentContext* pContext, plWorld* pWorld, const plComponentHandle& hAgent, plAiDebugFrame& out_frame);
 
+  /// The sector list for the sector views; also applies the request's inspected sector and its one-shot rebuild.
+  /// The squad list for the Squad tab; also applies the order the request carries.
+  static void FillSquads(plEngineProcessDocumentContext* pContext, plWorld* pWorld, const plAiDebugRequest& request, plAiDebugFrame& out_frame);
+
+  static void FillNavmesh(plWorld* pWorld, const plAiDebugRequest& request, plAiDebugFrame& out_frame);
+
   /// The agent one scene document watches.
   struct Watch
   {

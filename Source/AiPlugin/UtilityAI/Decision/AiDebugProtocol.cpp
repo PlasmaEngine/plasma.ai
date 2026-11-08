@@ -8,11 +8,14 @@
 
 namespace
 {
-  constexpr plUInt8 s_uiProtocolVersion = 3;
+  constexpr plUInt8 s_uiProtocolVersion = 4;
 
   // clang-format off
   constexpr plAiDebugOverlay s_Overlays[] = {
-    {"Navigation", "Navmesh", "AI.Navmesh.Visualize", 0, -1, true},
+    {"Navigation", "Navmesh", "AI.Navmesh.Visualize", 0, -1, true, "NavmeshView"},
+    {"Navigation", "Sector status", "AI.Navmesh.VisualizeMode", 1, 0, true, "NavmeshView"},
+    {"Navigation", "Rebuild reason", "AI.Navmesh.VisualizeMode", 2, 0, true, "NavmeshView"},
+    {"Navigation", "Polygon density", "AI.Navmesh.VisualizeMode", 3, 0, true, "NavmeshView"},
     {"Navigation", "Nav links", "AI.Navmesh.VisualizeLinks"},
     {"Navigation", "Blockers and obstacles", "AI.Navmesh.VisualizeBlockers"},
     {"Navigation", "Crowd avoidance", "AI.Crowd.Visualize"},
@@ -21,6 +24,10 @@ namespace
     {"Decisions", "Behavior scores", "AI.Agents.ShowScores"},
     {"Decisions", "Behavior history", "AI.Agents.ShowHistory"},
     {"Tactical", "Cover points", "AI.Tactical.VisualizeCover"},
+    {"Tactical", "Threat map \xC2\xB7 Combined", "AI.Threat.Visualize", 1, 0, true, "ThreatLayer"},
+    {"Tactical", "Threat map \xC2\xB7 Threat", "AI.Threat.Visualize", 2, 0, true, "ThreatLayer"},
+    {"Tactical", "Threat map \xC2\xB7 Visibility", "AI.Threat.Visualize", 3, 0, true, "ThreatLayer"},
+    {"Tactical", "Threat map \xC2\xB7 Danger", "AI.Threat.Visualize", 4, 0, true, "ThreatLayer"},
     {"Tactical", "Tactical queries", "AI.Tactical.VisualizeQueries"},
     {"Tactical", "Smart objects", "AI.SmartObjects.ShowDebug"},
     {"Tactical", "Squads and intent", "AI.Squad.ShowDebug"},
@@ -129,6 +136,11 @@ namespace
 
     out << w.m_sNavigation << w.m_sNavigationState << w.m_vSteeringTarget;
     out << w.m_bEqsCaptureArmed << w.m_sEqsQuery << w.m_fEqsCaptureTime << w.m_uiEqsStatus << w.m_uiEqsCandidates << w.m_uiEqsSurvivors << w.m_fEqsBestScore;
+
+    out << w.m_sTeam << w.m_bHasThreatMap << w.m_fThreatHere << w.m_fDangerHere << w.m_bSeenHere << w.m_bHasClaim << w.m_vClaimedCover << w.m_fCoverQueryTime;
+    WriteItems(out, w.m_CoverCandidates, [&](const plAiDebugFrame::Watched::CoverCandidate& c) {
+      out << c.m_vPosition << c.m_uiQuality << c.m_fProtection << c.m_fThreat << c.m_fDanger << c.m_fScore << c.m_bPicked;
+    });
   }
 
   plResult ReadWatched(plStreamReader& in, plAiDebugFrame::Watched& w)
@@ -162,7 +174,11 @@ namespace
     in >> w.m_sNavigation >> w.m_sNavigationState >> w.m_vSteeringTarget;
     in >> w.m_bEqsCaptureArmed >> w.m_sEqsQuery >> w.m_fEqsCaptureTime >> w.m_uiEqsStatus >> w.m_uiEqsCandidates >> w.m_uiEqsSurvivors >> w.m_fEqsBestScore;
 
-    return PL_SUCCESS;
+    in >> w.m_sTeam >> w.m_bHasThreatMap >> w.m_fThreatHere >> w.m_fDangerHere >> w.m_bSeenHere >> w.m_bHasClaim >> w.m_vClaimedCover >> w.m_fCoverQueryTime;
+    return ReadItems(in, w.m_CoverCandidates, [&](plAiDebugFrame::Watched::CoverCandidate& c) -> plResult {
+      in >> c.m_vPosition >> c.m_uiQuality >> c.m_fProtection >> c.m_fThreat >> c.m_fDanger >> c.m_fScore >> c.m_bPicked;
+      return PL_SUCCESS;
+    });
   }
 } // namespace
 
@@ -179,6 +195,10 @@ void plAiDebugRequest::Write(plStreamWriter& inout_stream) const
   inout_stream << m_bCaptureEqs;
   inout_stream << m_fHistorySince;
   inout_stream << m_PickObject;
+  inout_stream << m_vInspectSector.x << m_vInspectSector.y << m_bRebuildSector;
+
+  const plUInt8 uiAction = static_cast<plUInt8>(m_Order.m_Action);
+  inout_stream << uiAction << m_Order.m_sSquad << m_Order.m_uiIntent << m_Order.m_bRegion << m_Order.m_vRegionMin << m_Order.m_vRegionMax << m_Order.m_fSeconds << m_Order.m_bNoRetreat;
 }
 
 plResult plAiDebugRequest::Read(plStreamReader& inout_stream)
@@ -193,6 +213,11 @@ plResult plAiDebugRequest::Read(plStreamReader& inout_stream)
   inout_stream >> m_bCaptureEqs;
   inout_stream >> m_fHistorySince;
   inout_stream >> m_PickObject;
+  inout_stream >> m_vInspectSector.x >> m_vInspectSector.y >> m_bRebuildSector;
+
+  plUInt8 uiAction = 0;
+  inout_stream >> uiAction >> m_Order.m_sSquad >> m_Order.m_uiIntent >> m_Order.m_bRegion >> m_Order.m_vRegionMin >> m_Order.m_vRegionMax >> m_Order.m_fSeconds >> m_Order.m_bNoRetreat;
+  m_Order.m_Action = static_cast<OrderCommand::Action>(uiAction);
   return PL_SUCCESS;
 }
 
@@ -231,6 +256,30 @@ void plAiDebugFrame::Write(plStreamWriter& inout_stream) const
   out << m_Stats.m_uiAgents << m_Stats.m_uiDecisions << m_Stats.m_uiWokenDecisions << m_Stats.m_uiDecisionBudget << m_Stats.m_fBrainMs;
   out << m_Stats.m_uiEqsExecuted << m_Stats.m_uiEqsSuspended << m_Stats.m_uiEqsQueued << m_Stats.m_uiEqsTimedOut << m_Stats.m_uiRaycasts;
   out << m_Stats.m_uiCrowdAgents;
+
+  out << m_Navmesh.m_bPresent;
+  if (m_Navmesh.m_bPresent)
+  {
+    out << m_Navmesh.m_sName << m_Navmesh.m_uiSectorsX << m_Navmesh.m_uiSectorsY << m_Navmesh.m_fSectorSize;
+    out << m_Navmesh.m_uiPolyBudget << m_Navmesh.m_uiMaxBuilds << m_Navmesh.m_uiViewMode;
+
+    WriteItems(out, m_Navmesh.m_Sectors, [&](const NavSector& s) {
+      out << s.m_vCoord.x << s.m_vCoord.y << s.m_uiState << s.m_uiReason << s.m_uiPolys << s.m_uiBuilds << s.m_fBuildMs << s.m_fProgress << s.m_bRunning;
+    });
+  }
+
+  WriteItems(out, m_Squads, [&](const Squad& q) {
+    out << q.m_sId << q.m_uiPeak << q.m_uiLosses << q.m_uiRetreatLosses << q.m_uiIntent << q.m_bHasOrder << q.m_uiOrderIntent << q.m_bOrderRegion;
+    out << q.m_vRegionMin << q.m_vRegionMax << q.m_fOrderRemaining << q.m_fOrderDuration << q.m_bOrderNoRetreat << q.m_sOrderIssuer;
+    out << q.m_vHome << q.m_bHasTarget << q.m_vTarget;
+
+    WriteItems(out, q.m_Members, [&](const SquadMember& m) {
+      out << m.m_Object;
+      out << m.m_sName << m.m_vPosition << m.m_bAttackToken << m.m_bMoveToken;
+    });
+
+    WriteItems(out, q.m_History, [&](const SquadHistory& h) { out << h.m_fTime << h.m_sText; });
+  });
 }
 
 plResult plAiDebugFrame::Read(plStreamReader& inout_stream)
@@ -263,7 +312,34 @@ plResult plAiDebugFrame::Read(plStreamReader& inout_stream)
   in >> m_Stats.m_uiEqsExecuted >> m_Stats.m_uiEqsSuspended >> m_Stats.m_uiEqsQueued >> m_Stats.m_uiEqsTimedOut >> m_Stats.m_uiRaycasts;
   in >> m_Stats.m_uiCrowdAgents;
 
-  return PL_SUCCESS;
+  in >> m_Navmesh.m_bPresent;
+  if (m_Navmesh.m_bPresent)
+  {
+    in >> m_Navmesh.m_sName >> m_Navmesh.m_uiSectorsX >> m_Navmesh.m_uiSectorsY >> m_Navmesh.m_fSectorSize;
+    in >> m_Navmesh.m_uiPolyBudget >> m_Navmesh.m_uiMaxBuilds >> m_Navmesh.m_uiViewMode;
+
+    PL_SUCCEED_OR_RETURN(ReadItems(in, m_Navmesh.m_Sectors, [&](NavSector& s) -> plResult {
+      in >> s.m_vCoord.x >> s.m_vCoord.y >> s.m_uiState >> s.m_uiReason >> s.m_uiPolys >> s.m_uiBuilds >> s.m_fBuildMs >> s.m_fProgress >> s.m_bRunning;
+      return PL_SUCCESS;
+    }));
+  }
+
+  return ReadItems(in, m_Squads, [&](Squad& q) -> plResult {
+    in >> q.m_sId >> q.m_uiPeak >> q.m_uiLosses >> q.m_uiRetreatLosses >> q.m_uiIntent >> q.m_bHasOrder >> q.m_uiOrderIntent >> q.m_bOrderRegion;
+    in >> q.m_vRegionMin >> q.m_vRegionMax >> q.m_fOrderRemaining >> q.m_fOrderDuration >> q.m_bOrderNoRetreat >> q.m_sOrderIssuer;
+    in >> q.m_vHome >> q.m_bHasTarget >> q.m_vTarget;
+
+    PL_SUCCEED_OR_RETURN(ReadItems(in, q.m_Members, [&](SquadMember& m) -> plResult {
+      in >> m.m_Object;
+      in >> m.m_sName >> m.m_vPosition >> m.m_bAttackToken >> m.m_bMoveToken;
+      return PL_SUCCESS;
+    }));
+
+    return ReadItems(in, q.m_History, [&](SquadHistory& h) -> plResult {
+      in >> h.m_fTime >> h.m_sText;
+      return PL_SUCCESS;
+    });
+  });
 }
 
 void plAiDebugFrame::ToBuffer(plDataBuffer& out_buffer) const

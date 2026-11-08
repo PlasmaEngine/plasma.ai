@@ -1,5 +1,6 @@
 #include <AiPlugin/AiPluginPCH.h>
 
+#include <AiPlugin/Navigation/NavigationConfig.h>
 #include <DetourNavMesh.h>
 #include <RendererCore/Debug/DebugRenderer.h>
 
@@ -29,14 +30,19 @@ void DrawMeshTilePolygons(const dtMeshTile& meshTile, plDynamicArray<plDebugRend
 
     const dtPolyDetail& polyDetail = meshTile.detailMeshes[polyIdx];
 
+    // polys closed by a nav blocker are drawn red, keeping the transparency of their ground type
+    plColor polyColor = areaColors[poly.getArea()];
+    if ((poly.flags & plAiNavMeshPolyFlags::Blocked) != 0)
+    {
+      polyColor = plColor(0.85f, 0.08f, 0.08f, polyColor.a);
+    }
+
     for (int triIdx = 0; triIdx < polyDetail.triCount; ++triIdx)
     {
       const plUInt8* pTriangle = &meshTile.detailTris[(polyDetail.triBase + triIdx) * 4]; // 3 indices, one byte flags
 
       plDebugRenderer::Triangle& tri = out_triangles.ExpandAndGetRef();
-
-      plUInt8 uiArea = poly.getArea();
-      tri.m_color = areaColors[uiArea];
+      tri.m_color = polyColor;
 
       for (int vtxIdx = 0; vtxIdx < 3; ++vtxIdx)
       {

@@ -5,6 +5,11 @@
 #include <AiPlugin/Navigation/Components/NavigationComponent.h>
 #include <AiPlugin/Navigation/Components/VoxelNavigationComponent.h>
 #include <AiPlugin/Navigation/CrowdWorldModule.h>
+#include <AiPlugin/Navigation/NavMesh.h>
+#include <AiPlugin/Navigation/NavMeshWorldModule.h>
+#include <AiPlugin/Tactical/SquadWorldModule.h>
+#include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/Tactical/ThreatWorldModule.h>
 #include <AiPlugin/UtilityAI/Components/AiAgentComponent.h>
 #include <AiPlugin/UtilityAI/Decision/AiBrainWorldModule.h>
 #include <AiPlugin/UtilityAI/Decision/AiDebugProtocol.h>
@@ -42,6 +47,17 @@ namespace
       default:
         return false;
     }
+  }
+
+  plInt32 GetIntCVar(const char* szName, plInt32 iDefault)
+  {
+    if (plCVar* pCVar = plCVar::FindCVarByName(szName))
+    {
+      if (pCVar->GetType() == plCVarType::Int)
+        return static_cast<plCVarInt*>(pCVar)->GetValue();
+    }
+
+    return iDefault;
   }
 
   /// The first agent on the object or below it, depth first.
@@ -249,9 +265,145 @@ void plAiDebugHandler::BuildFrame(plEngineProcessDocumentContext* pContext, plWo
     out_frame.m_Stats.m_uiCrowdAgents = pCrowd->GetSolvedAgentCount();
   }
 
+  FillNavmesh(pWorld, request, out_frame);
+  FillSquads(pContext, pWorld, request, out_frame);
+
   if (!hWatched.IsInvalidated())
   {
     FillWatched(pContext, pWorld, hWatched, out_frame);
+  }
+}
+
+void plAiDebugHandler::FillSquads(plEngineProcessDocumentContext* pContext, plWorld* pWorld, const plAiDebugRequest& request, plAiDebugFrame& out_frame)
+{
+  plAiSquadWorldModule* pSquads = pWorld->GetModule<plAiSquadWorldModule>();
+  if (pSquads == nullptr)
+    return;
+
+  // an order the Squad tab gave
+  const plAiDebugRequest::OrderCommand& command = request.m_Order;
+
+  if (command.m_Action != plAiDebugRequest::OrderCommand::Action::None && !command.m_sSquad.IsEmpty())
+  {
+    plHashedString sSquad;
+    sSquad.Assign(command.m_sSquad);
+
+    if (command.m_Action == plAiDebugRequest::OrderCommand::Action::Cancel)
+    {
+      pSquads->CancelOrder(sSquad);
+    }
+    else
+    {
+      plAiSquadOrder order;
+      order.m_Intent = static_cast<plAiSquadIntent::Enum>(command.m_uiIntent);
+      order.m_bHasRegion = command.m_bRegion;
+      order.m_vRegionMin = command.m_vRegionMin;
+      order.m_vRegionMax = command.m_vRegionMax;
+      order.m_Duration = plTime::MakeFromSeconds(command.m_fSeconds);
+      order.m_bNoRetreat = command.m_bNoRetreat;
+      order.m_sIssuer = "AI Debugger";
+      pSquads->IssueOrder(sSquad, order);
+    }
+  }
+
+  plDynamicArray<plAiSquadWorldModule::SquadInfo> squads;
+  pSquads->GetSquadInfos(squads);
+
+  for (const plAiSquadWorldModule::SquadInfo& info : squads)
+  {
+    plAiDebugFrame::Squad& squad = out_frame.m_Squads.ExpandAndGetRef();
+    squad.m_sId = info.m_sId.GetView();
+    squad.m_uiPeak = info.m_uiPeakSize;
+    squad.m_uiLosses = info.m_uiLosses;
+    squad.m_uiRetreatLosses = info.m_uiRetreatLosses;
+    squad.m_uiIntent = static_cast<plUInt8>(info.m_Intent.GetValue());
+    squad.m_bHasOrder = info.m_bHasOrder;
+    squad.m_uiOrderIntent = static_cast<plUInt8>(info.m_Order.m_Intent.GetValue());
+    squad.m_bOrderRegion = info.m_Order.m_bHasRegion;
+    squad.m_vRegionMin = info.m_Order.m_vRegionMin;
+    squad.m_vRegionMax = info.m_Order.m_vRegionMax;
+    squad.m_fOrderRemaining = info.m_fOrderRemaining;
+    squad.m_fOrderDuration = info.m_Order.m_Duration.GetSeconds();
+    squad.m_bOrderNoRetreat = info.m_Order.m_bNoRetreat;
+    squad.m_sOrderIssuer = info.m_Order.m_sIssuer;
+    squad.m_vHome = info.m_vHome;
+    squad.m_bHasTarget = info.m_bHasTarget;
+    squad.m_vTarget = info.m_vTargetPosition;
+
+    for (const plAiSquadWorldModule::MemberInfo& memberInfo : info.m_Members)
+    {
+      plAiDebugFrame::SquadMember& member = squad.m_Members.ExpandAndGetRef();
+      member.m_Object = GetObjectId(pContext, memberInfo.m_hOwner);
+      member.m_sName = GetObjectName(pWorld, memberInfo.m_hOwner);
+      member.m_vPosition = memberInfo.m_vPosition;
+      member.m_bAttackToken = memberInfo.m_bAttackToken;
+      member.m_bMoveToken = memberInfo.m_bMoveToken;
+    }
+
+    for (const plAiSquadWorldModule::HistoryInfo& historyInfo : info.m_History)
+    {
+      plAiDebugFrame::SquadHistory& entry = squad.m_History.ExpandAndGetRef();
+      entry.m_fTime = historyInfo.m_fTime;
+      entry.m_sText = historyInfo.m_sText;
+    }
+  }
+}
+
+void plAiDebugHandler::FillNavmesh(plWorld* pWorld, const plAiDebugRequest& request, plAiDebugFrame& out_frame)
+{
+  plAiNavMeshWorldModule* pNavModule = pWorld->GetModule<plAiNavMeshWorldModule>();
+  if (pNavModule == nullptr)
+    return;
+
+  plAiNavMesh* pNavMesh = pNavModule->GetVisualizedNavMesh();
+  if (pNavMesh == nullptr)
+    return;
+
+  pNavModule->SetInspectedSector(request.m_vInspectSector);
+
+  const plAiNavmeshConfig& config = pNavMesh->GetConfig();
+  const bool bInGrid = request.m_vInspectSector.x >= 0 && request.m_vInspectSector.y >= 0 && request.m_vInspectSector.x < config.m_uiNumSectorsX && request.m_vInspectSector.y < config.m_uiNumSectorsY;
+
+  if (request.m_bRebuildSector && bInGrid)
+  {
+    const plAiNavMesh::SectorID sectorID = pNavMesh->CalculateSectorID(request.m_vInspectSector);
+    const plAiNavMeshSector* pSector = pNavMesh->GetSector(sectorID);
+
+    if (pSector != nullptr && pSector->m_FlagUsable == 1)
+    {
+      pNavMesh->InvalidateSector(sectorID, true, plAiNavMeshRebuildReason::Requested);
+    }
+    else
+    {
+      pNavMesh->RequestSector(sectorID);
+    }
+  }
+
+  plAiDebugFrame::Navmesh& nav = out_frame.m_Navmesh;
+  nav.m_bPresent = true;
+  nav.m_sName = config.m_sName;
+  nav.m_uiSectorsX = config.m_uiNumSectorsX;
+  nav.m_uiSectorsY = config.m_uiNumSectorsY;
+  nav.m_fSectorSize = pNavMesh->GetSectorSize();
+  nav.m_uiPolyBudget = plAiNavMeshWorldModule::GetSectorPolyBudget();
+  nav.m_uiMaxBuilds = static_cast<plUInt32>(plMath::Max(1, GetIntCVar("AI.Navmesh.MaxConcurrentBuilds", 4)));
+  nav.m_uiViewMode = static_cast<plUInt8>(plMath::Clamp(GetIntCVar("AI.Navmesh.VisualizeMode", 0), 0, 255));
+
+  plDynamicArray<plAiNavMeshSectorStatus> sectors;
+  pNavMesh->GetSectorStatus(sectors);
+  nav.m_Sectors.Reserve(sectors.GetCount());
+
+  for (const plAiNavMeshSectorStatus& status : sectors)
+  {
+    plAiDebugFrame::NavSector& out = nav.m_Sectors.ExpandAndGetRef();
+    out.m_vCoord = status.m_vCoord;
+    out.m_uiState = static_cast<plUInt8>(status.m_State);
+    out.m_uiReason = static_cast<plUInt8>(status.m_LastReason);
+    out.m_uiPolys = status.m_uiPolyCount;
+    out.m_uiBuilds = status.m_uiBuildCount;
+    out.m_fBuildMs = static_cast<float>(status.m_LastBuildDuration.GetMilliseconds());
+    out.m_fProgress = status.m_fBuildProgress;
+    out.m_bRunning = status.m_bBuildRunning;
   }
 }
 
@@ -438,6 +590,68 @@ void plAiDebugHandler::FillWatched(plEngineProcessDocumentContext* pContext, plW
       {
         watched.m_fEqsBestScore = pCapture->m_Candidates[pCapture->m_iSelected].m_fFinal;
       }
+    }
+  }
+
+  // the team's threat map where the agent stands, and the cover its latest query chose between
+  const plHashedString sTeam = pAgent->GetResolvedTeam();
+  watched.m_sTeam = sTeam.GetView();
+
+  if (plAiTacticalWorldModule* pTactical = pWorld->GetModule<plAiTacticalWorldModule>())
+  {
+    pTactical->SetDebugWatched(pOwner->GetHandle());
+
+    plAiCoverPointHandle hClaim;
+    plAiCoverPoint claimed;
+    if (pTactical->GetClaimedCover(pOwner->GetHandle(), hClaim) && pTactical->ResolveCover(hClaim, claimed))
+    {
+      watched.m_bHasClaim = true;
+      watched.m_vClaimedCover = claimed.m_vPosition;
+    }
+
+    plDynamicArray<plAiTacticalQueryResult::Candidate> candidates;
+    plTime queryTime;
+    if (pTactical->GetDebugCandidates(candidates, queryTime))
+    {
+      watched.m_fCoverQueryTime = ToSeconds(queryTime);
+
+      for (const plAiTacticalQueryResult::Candidate& candidate : candidates)
+      {
+        plAiDebugFrame::Watched::CoverCandidate& out = watched.m_CoverCandidates.ExpandAndGetRef();
+        out.m_vPosition = candidate.m_vPosition;
+        out.m_fProtection = candidate.m_fProtection;
+        out.m_fThreat = candidate.m_fThreat;
+        out.m_fDanger = candidate.m_fDanger;
+        out.m_fScore = candidate.m_fScore;
+        out.m_bPicked = watched.m_bHasClaim && (candidate.m_vPosition - watched.m_vClaimedCover).GetLengthSquared() < 0.01f;
+
+        plAiCoverPoint point;
+        if (candidate.m_CoverHandle.IsValid() && pTactical->ResolveCover(candidate.m_CoverHandle, point))
+        {
+          out.m_uiQuality = static_cast<plUInt8>(point.m_Quality.GetValue());
+        }
+      }
+    }
+  }
+
+  if (const plAiThreatWorldModule* pThreat = pWorld->GetModuleReadOnly<plAiThreatWorldModule>())
+  {
+    if (const plSharedPtr<const plAiThreatSnapshot> pSnapshot = pThreat->GetSnapshot(sTeam))
+    {
+      const plVec3 vPosition = pOwner->GetGlobalPosition();
+      watched.m_bHasThreatMap = true;
+      watched.m_fThreatHere = pSnapshot->GetThreat(vPosition);
+      watched.m_fDangerHere = pSnapshot->GetDanger(vPosition);
+      watched.m_bSeenHere = pSnapshot->GetVisibility(vPosition) > 0.5f;
+    }
+  }
+
+  // the viewport's threat map follows the watched agent's team
+  if (!sTeam.IsEmpty() && GetIntCVar("AI.Threat.Visualize", 0) > 0)
+  {
+    if (plCVar* pCVar = plCVar::FindCVarByName("AI.Threat.VisualizeTeam"); pCVar != nullptr && pCVar->GetType() == plCVarType::String)
+    {
+      *static_cast<plCVarString*>(pCVar) = sTeam.GetString();
     }
   }
 }

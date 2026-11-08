@@ -88,7 +88,9 @@ struct plAiTacticalScorerDesc
     CoverQualityMin,       ///< hard filter: candidate must be a cover point with quality >= param0
     UnclaimedOnly,         ///< hard filter: cover point must be unclaimed (or claimed by the querier itself)
     CoverFacingThreat,     ///< cover point's wall must face the threat (the wall is between us and them); param0 = min dot of wallDir vs to-threat direction (~0.2). Non-cover candidates pass.
-    ReachableApprox        ///< navmesh raycast from querier toward candidate; penalizes unreachable candidates
+    ReachableApprox,       ///< navmesh raycast from querier toward candidate; penalizes unreachable candidates
+    Threat,                ///< the querier's team's threat map: 1 where known enemies cannot hurt, 0 where they see best (neutral without a map)
+    Danger                 ///< danger areas of the querier's team: the final score is multiplied by 1 - danger; param0 > 0 discards candidates whose danger reaches it (a hard filter then)
   };
 
   Type m_Type = Type::DistanceBandToQuerier;
@@ -153,6 +155,9 @@ struct PL_AIPLUGIN_DLL plAiTacticalQueryDesc
 
   plHybridArray<plAiTacticalScorerDesc, 8> m_Scorers;
 
+  /// The team whose threat map and danger areas the Threat and Danger scorers read. Empty = no map.
+  plHashedString m_sTeam;
+
   /// \brief Fills generator + scorers for the given preset. Positions/handles must be set by the caller.
   static plAiTacticalQueryDesc MakeFromPreset(plAiTacticalQueryPreset::Enum preset, const plVec3& vQuerier, const plVec3& vThreat, bool bHasThreat, float fRadiusMin, float fRadiusMax, plAngle flankAngle = plAngle::MakeFromDegree(100), plAiCoverQuality::Enum minQuality = plAiCoverQuality::Low);
 };
@@ -179,6 +184,12 @@ struct plAiTacticalQueryResult
     plVec3 m_vPosition = plVec3::MakeZero();
     float m_fScore = 0.0f;
     plAiCoverPointHandle m_CoverHandle; ///< valid when the candidate is a baked cover point
+
+    /// What the score is made of, for the AI Debugger: how well the point shields from the threat (1 = the line of sight
+    /// is blocked), and the threat and danger there.
+    float m_fProtection = 0.0f;
+    float m_fThreat = 0.0f;
+    float m_fDanger = 0.0f;
   };
 
   plHybridArray<Candidate, 8> m_TopN; ///< [0] = best

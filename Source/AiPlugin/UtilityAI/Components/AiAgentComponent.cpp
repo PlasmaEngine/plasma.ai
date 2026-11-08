@@ -3,6 +3,7 @@
 #include <AiPlugin/Eqs/EqsWorldModule.h>
 #include <AiPlugin/Tactical/SquadWorldModule.h>
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/Tactical/ThreatWorldModule.h>
 #include <AiPlugin/UtilityAI/Components/AiAgentComponent.h>
 #include <AiPlugin/UtilityAI/Decision/AiBrainWorldModule.h>
 #include <AiPlugin/UtilityAI/Perception/AiPerceptionWorldModule.h>
@@ -30,10 +31,13 @@ PL_BEGIN_COMPONENT_TYPE(plAiAgentComponent, 2, plComponentMode::Static)
   PL_BEGIN_FUNCTIONS
   {
     PL_SCRIPT_FUNCTION_PROPERTY(RequestDecision),
+    PL_SCRIPT_FUNCTION_PROPERTY(InterruptBehavior),
     PL_SCRIPT_FUNCTION_PROPERTY(SetBehaviorEnabled, In, "Behavior", In, "Enabled"),
     PL_SCRIPT_FUNCTION_PROPERTY(SetBehaviorWeight, In, "Behavior", In, "Scale", In, "DurationSeconds"),
     PL_SCRIPT_FUNCTION_PROPERTY(IssueCommand, In, "Command", In, "Position", In, "Target", In, "ExpirySeconds"),
     PL_SCRIPT_FUNCTION_PROPERTY(CancelCommand),
+    PL_SCRIPT_FUNCTION_PROPERTY(IssueSquadOrder, In, "Intent", In, "RegionCenter", In, "RegionRadius", In, "DurationSeconds", In, "NoRetreat"),
+    PL_SCRIPT_FUNCTION_PROPERTY(CancelSquadOrder),
     PL_SCRIPT_FUNCTION_PROPERTY(GetActiveBehavior)->AddFlags(plPropertyFlags::Const),
     PL_SCRIPT_FUNCTION_PROPERTY(GetActiveTarget)->AddFlags(plPropertyFlags::Const),
   }
@@ -111,6 +115,14 @@ void plAiAgentComponent::RequestDecision()
   }
 }
 
+void plAiAgentComponent::InterruptBehavior()
+{
+  if (plAiBrainWorldModule* pBrain = GetBrain())
+  {
+    pBrain->InterruptBehavior(m_uiAgentIndex);
+  }
+}
+
 void plAiAgentComponent::SetBehaviorEnabled(const char* szBehavior, bool bEnabled)
 {
   if (plAiBrainWorldModule* pBrain = GetBrain())
@@ -132,6 +144,36 @@ void plAiAgentComponent::IssueCommand(const char* szCommand, const plVec3& vPosi
   if (plAiBrainWorldModule* pBrain = GetBrain())
   {
     pBrain->IssueCommand(m_uiAgentIndex, szCommand, vPosition, hTarget, plTime::MakeFromSeconds(fExpirySeconds));
+  }
+}
+
+void plAiAgentComponent::IssueSquadOrder(plEnum<plAiSquadIntent> intent, const plVec3& vRegionCenter, float fRegionRadius, float fDurationSeconds, bool bNoRetreat)
+{
+  plAiSquadWorldModule* pSquads = GetWorld()->GetModule<plAiSquadWorldModule>();
+  if (pSquads == nullptr || m_sSquadId.IsEmpty())
+    return;
+
+  plAiSquadOrder order;
+  order.m_Intent = intent;
+  order.m_Duration = plTime::MakeFromSeconds(plMath::Max(fDurationSeconds, 0.0f));
+  order.m_bNoRetreat = bNoRetreat;
+  order.m_sIssuer = "Script";
+
+  if (fRegionRadius > 0.0f)
+  {
+    order.m_bHasRegion = true;
+    order.m_vRegionMin = vRegionCenter.GetAsVec2() - plVec2(fRegionRadius);
+    order.m_vRegionMax = vRegionCenter.GetAsVec2() + plVec2(fRegionRadius);
+  }
+
+  pSquads->IssueOrder(m_sSquadId, order);
+}
+
+void plAiAgentComponent::CancelSquadOrder()
+{
+  if (plAiSquadWorldModule* pSquads = GetWorld()->GetModule<plAiSquadWorldModule>())
+  {
+    pSquads->CancelOrder(m_sSquadId);
   }
 }
 
@@ -214,6 +256,9 @@ void plAiAgentComponent::OnSimulationStarted()
   // EQS queries (plStateMachineState_AiRunEqsQuery) need the module to exist - SM states run
   // inside the brain module's update, where world module creation is not safe
   GetWorld()->GetOrCreateModule<plAiEqsWorldModule>();
+
+  // the team's threat map feeds cover queries and EQS tests, which run inside the brain's update as well
+  GetWorld()->GetOrCreateModule<plAiThreatWorldModule>();
 
   if (!m_sSquadId.IsEmpty())
   {

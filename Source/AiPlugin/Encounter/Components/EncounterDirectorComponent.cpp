@@ -561,10 +561,41 @@ void plAiEncounterDirectorComponent::UpdateDueWave(WaveStatus& ref_wave, const p
   }
 }
 
+void plAiEncounterDirectorComponent::IssueWaveOrder(const WaveStatus& wave_status, const plAiEncounterWaveComponent& wave)
+{
+  if (wave.m_OrderIntent == plAiSquadIntent::None || wave_status.m_sSquad.IsEmpty())
+    return;
+
+  plAiSquadWorldModule* pSquads = GetWorld()->GetModule<plAiSquadWorldModule>();
+  if (pSquads == nullptr)
+    return;
+
+  plAiSquadOrder order;
+  order.m_Intent = wave.m_OrderIntent;
+  order.m_Duration = plTime::MakeFromSeconds(wave.m_fOrderDuration);
+  order.m_bNoRetreat = wave.m_bOrderNoRetreat;
+  plStringBuilder sIssuer;
+  sIssuer.SetFormat("Encounter: {}", wave.GetOwner()->GetName());
+  order.m_sIssuer = sIssuer;
+
+  if (wave.m_fOrderRadius > 0.0f)
+  {
+    const plVec2 vCenter = wave.GetOwner()->GetGlobalPosition().GetAsVec2();
+    order.m_bHasRegion = true;
+    order.m_vRegionMin = vCenter - plVec2(wave.m_fOrderRadius);
+    order.m_vRegionMax = vCenter + plVec2(wave.m_fOrderRadius);
+  }
+
+  pSquads->IssueOrder(wave_status.m_sSquad, order);
+}
+
 void plAiEncounterDirectorComponent::Release(WaveStatus& ref_wave, const plAiEncounterWaveComponent& wave)
 {
   ref_wave.m_State = plAiEncounterWaveState::Released;
   ref_wave.m_ReleasedAt = m_Elapsed;
+
+  // the squad gets its order as soon as it forms
+  IssueWaveOrder(ref_wave, wave);
 
   plGameObject* pSpawner = nullptr;
   if (!GetWorld()->TryGetObject(ref_wave.m_hSpawner, pSpawner))

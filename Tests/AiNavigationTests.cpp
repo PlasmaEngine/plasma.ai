@@ -2,6 +2,7 @@
 #include <AiPlugin/Navigation/CrowdWorldModule.h>
 #include <AiPlugin/Navigation/NavMesh.h>
 #include <AiPlugin/Navigation/NavMeshWorldModule.h>
+#include <AiPlugin/Navigation/Navigation.h>
 #include <AiPlugin/Utils/RcMath.h>
 #include <Core/Physics/SurfaceResource.h>
 #include <Core/ResourceManager/ResourceManager.h>
@@ -98,12 +99,38 @@ namespace
       dtPolyRef poly = 0;
       float nearest[3];
 
-      if (dtStatusFailed(query.findNearestPoly(center, halfExtents, &filter, &poly, nearest)) || poly == 0)
+      if (dtStatusFailed(query.findNearestPoly(center, halfExtents, &filter, &poly, nearest)) || poly == 0 || !IsUnder(vPosition, nearest))
         return 0xFF;
 
       unsigned char uiArea = 0xFF;
       m_pNavMesh->GetDetourNavMesh()->getPolyArea(poly, &uiArea);
       return uiArea;
+    }
+
+    /// Whether the default path search filter accepts the polygon at vPosition.
+    bool IsPassableAt(const plVec3& vPosition)
+    {
+      PL_LOCK(m_World.GetWorld().GetReadMarker());
+
+      dtNavMeshQuery query;
+      query.init(m_pNavMesh->GetDetourNavMesh(), 64);
+
+      const plRcPos center = vPosition;
+      const plRcPos halfExtents = plVec3(0.1f, 0.1f, 1.0f);
+      dtPolyRef poly = 0;
+      float nearest[3];
+
+      if (dtStatusFailed(query.findNearestPoly(center, halfExtents, &m_pModule->GetPathSearchFilter(""), &poly, nearest)))
+        return false;
+
+      return poly != 0 && IsUnder(vPosition, nearest);
+    }
+
+    /// findNearestPoly returns any polygon whose bounds touch the query box - only count one that lies under the point.
+    static bool IsUnder(const plVec3& vPosition, const float* pNearest)
+    {
+      const plVec3 vNearest = plRcPos(pNearest);
+      return (vNearest.GetAsVec2() - vPosition.GetAsVec2()).GetLengthSquared() < plMath::Square(0.05f);
     }
 
     /// The flags of the first baked nav link, 0xFFFF if there is none.
@@ -160,6 +187,43 @@ namespace
     Check(status.m_State == plAiNavMeshSectorState::Ready, "F10: a requested sector reports Ready once built");
     Check(status.m_uiPolyCount > 0 && status.m_uiBuildCount == 1, "F10: the status reports polygons and one build");
     Check(status.m_LastReason == plAiNavMeshRebuildReason::FirstBuild && status.m_LastBuildDuration.IsPositive(), "F10: the status says why and how long it was built");
+  }
+
+  void TestSectorStats()
+  {
+    NavMeshWorld world;
+    const plVec2 vFirst(1, 1);
+    const plVec2 vSecond(40, 1);
+
+    world.Request(vFirst);
+    world.Request(vSecond);
+    world.m_World.Step(1);
+
+    // a running build reports itself and an estimate that stays below done
+    const plAiNavMeshSectorStatus running = world.GetStatus(vFirst);
+    if (running.m_State == plAiNavMeshSectorState::Building)
+    {
+      Check(running.m_bBuildRunning && running.m_fBuildProgress >= 0.0f && running.m_fBuildProgress <= 0.95f, "A1: a building sector reports a running build with progress below done");
+    }
+
+    world.StepUntilBuilt(vFirst, 1);
+    world.StepUntilBuilt(vSecond, 1);
+
+    plDynamicArray<plAiNavMeshSectorStatus> sectors;
+    {
+      PL_LOCK(world.m_World.GetWorld().GetReadMarker());
+      world.m_pNavMesh->GetSectorStatus(sectors);
+    }
+
+    const plAiNavMeshStats stats = plAiNavMesh::CalculateStats(sectors, 100000);
+    Check(stats.m_uiSectors == 2 && stats.m_uiReady == 2 && stats.m_uiQueued == 0 && stats.m_uiBuilding == 0 && stats.m_uiFailed == 0, "A1: the stats count two ready sectors");
+    Check(stats.m_uiNearPolyBudget == 0 && stats.m_fAverageBuildMs > 0.0f, "A1: the stats report the average build time and no sector near a large budget");
+    Check(plAiNavMesh::CalculateStats(sectors, 1).m_uiNearPolyBudget == 2, "A1: with a tiny budget every built sector is near it");
+
+    const plAiNavMeshSectorStatus done = world.GetStatus(vFirst);
+    Check(done.m_bHasBounds && plMath::Abs(done.m_fMinZ) < 1.0f && !done.m_bBuildRunning && done.m_fBuildProgress == 0.0f, "A1: a built sector knows its height range, for the views");
+
+    Check(plAiNavMesh::IsNearPolyBudget(85, 100) && !plAiNavMesh::IsNearPolyBudget(84, 100) && !plAiNavMesh::IsNearPolyBudget(5, 0), "A1: 85 % of the budget is near it");
   }
 
   void TestInvalidateDuringBuild()
@@ -346,16 +410,178 @@ namespace
     world.m_World.Step(2);
     Check((world.GetFirstLinkFlags() & plAiNavMeshPolyFlags::Blocked) == 0, "N9: switching the blocker off opens the link again");
   }
+
+  void TestBlockerClosesPolygons()
+  {
+    NavMeshWorld world;
+    plAiNavMeshWorldModule::BlockerID blocker = plAiNavMeshWorldModule::InvalidBlockerID;
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      blocker = world.m_pModule->RegisterNavBlocker(plBoundingBox::MakeFromMinMax(plVec3(2, 2, -1), plVec3(4, 4, 1)), true, plAiNavBlockerMode::Block);
+    }
+
+    {
+      // ends 0.3 m above the floor, like a door leaf with a gap under it
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      world.m_pModule->RegisterNavBlocker(plBoundingBox::MakeFromMinMax(plVec3(-4, 2, 0.3f), plVec3(-2, 4, 2.3f)), true, plAiNavBlockerMode::Block);
+    }
+
+    world.BuildAround({plVec2(3, 3), plVec2(-3, 3)});
+
+    Check(!world.IsPassableAt(plVec3(3, 3, 0)), "NB1: path searches skip the polygons under an active blocker");
+    Check(world.IsPassableAt(plVec3(5.5f, 3, 0)), "NB1: polygons next to the blocker stay open");
+    Check(!world.IsPassableAt(plVec3(-3, 3, 0)), "NB1: a blocker that ends just above the floor still closes it");
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      world.m_pModule->SetNavBlockerActive(blocker, false);
+    }
+
+    world.m_World.Step(2);
+    Check(world.IsPassableAt(plVec3(3, 3, 0)), "NB1: switching the blocker off opens its polygons");
+  }
+
+  void TestLongPathIsContinued()
+  {
+    // a slalom between carved walls along a 900 m strip needs more than 256 polygons, the length of a path corridor
+    NavMeshWorld world(false);
+    plHybridArray<plVec2, 64> sectors;
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      world.m_pGeo->AddFloor(plVec2(-450, -3), plVec2(450, 3), 0.0f);
+
+      for (plInt32 i = -36; i <= 36; ++i)
+      {
+        const float fX = static_cast<float>(i) * 12.0f;
+        const float fMinY = (i & 1) ? -3.5f : -1.0f;
+        const float fMaxY = (i & 1) ? 1.0f : 3.5f;
+        world.m_pModule->RegisterNavBlocker(plBoundingBox::MakeFromMinMax(plVec3(fX - 0.5f, fMinY, -1), plVec3(fX + 0.5f, fMaxY, 1)), true, plAiNavBlockerMode::Carve);
+      }
+    }
+
+    // the path search asks for the sectors up to 10 m around the strip, which reaches rows on both sides of y = 0 and past both ends
+    for (float x = -480.0f; x <= 480.0f; x += 30.0f)
+    {
+      for (float y : {-5.0f, 5.0f})
+      {
+        sectors.PushBack(plVec2(x, y));
+        world.Request(sectors.PeekBack());
+      }
+    }
+
+    for (const plVec2& vSector : sectors)
+    {
+      world.StepUntilBuilt(vSector, 1);
+    }
+
+    world.m_World.Step(2);
+
+    PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+
+    plAiNavigation navigation;
+    navigation.SetNavmesh(world.m_pNavMesh);
+    navigation.SetQueryFilter(world.m_pModule->GetPathSearchFilter(""));
+
+    const plVec3 vTarget(445, 0, 0);
+    plVec3 vPosition(-445, 0, 0);
+    navigation.SetTargetPosition(vTarget);
+
+    bool bContinued = false;
+    bool bFailed = false;
+    plUInt32 uiFrame = 0;
+
+    for (; uiFrame < 4000 && (vPosition - vTarget).GetLength() > 1.0f; ++uiFrame)
+    {
+      navigation.SetCurrentPosition(vPosition);
+      navigation.Update();
+
+      const plAiNavigation::State state = navigation.GetState();
+
+      if (state == plAiNavigation::State::FullPathFound || state == plAiNavigation::State::PartialPathFound)
+      {
+        bContinued |= navigation.IsPathContinued();
+
+        plAiSteeringInfo info;
+        navigation.ComputeSteeringInfo(info, plVec2(1, 0), 5.0f);
+
+        plVec3 vStep = info.m_vNextWaypoint - vPosition;
+        vStep.z = 0.0f;
+        const float fStep = plMath::Min(vStep.GetLength(), 0.8f);
+        vStep.NormalizeIfNotZero(plVec3::MakeZero()).IgnoreResult();
+        vPosition += vStep * fStep;
+      }
+      else if (state != plAiNavigation::State::StartNewSearch && state != plAiNavigation::State::Searching)
+      {
+        bFailed = true;
+        break;
+      }
+    }
+
+    Check(bContinued, "N4: a path longer than the corridor is cut and then extended");
+    Check(!bFailed, "N4: a long path doesn't fail or report a partial path");
+    Check((vPosition - vTarget).GetLength() <= 1.0f, "N4: an agent walks a 890 m path to its target");
+    Check(navigation.GetState() == plAiNavigation::State::FullPathFound && !navigation.IsPathContinued(), "N4: the corridor ends at the target once the agent arrived");
+  }
+
+  void TestCarveBlocker()
+  {
+    NavMeshWorld world;
+    const plVec2 vSector(3, 3);
+    plAiNavMeshWorldModule::BlockerID carve = plAiNavMeshWorldModule::InvalidBlockerID;
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      carve = world.m_pModule->RegisterNavBlocker(plBoundingBox::MakeFromMinMax(plVec3(2, 2, -1), plVec3(4, 4, 1)), true, plAiNavBlockerMode::Carve);
+    }
+
+    world.BuildAround({vSector});
+
+    Check(world.GetAreaAt(plVec3(3, 3, 0)) == 0xFF, "NB2: a carve blocker leaves no polygon inside its box");
+    Check(world.GetAreaAt(plVec3(8, 8, 0)) != 0xFF, "NB2: the floor around the carve is built");
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      world.m_pModule->SetNavBlockerActive(carve, false);
+    }
+
+    world.StepUntilBuilt(vSector, 2);
+    world.m_World.Step(2);
+    Check(world.GetAreaAt(plVec3(3, 3, 0)) != 0xFF, "NB2: switching a carve off rebuilds the floor inside its box");
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      world.m_pModule->SetNavBlockerActive(carve, true);
+    }
+
+    world.StepUntilBuilt(vSector, 3);
+    world.m_World.Step(2);
+    Check(world.GetAreaAt(plVec3(3, 3, 0)) == 0xFF, "NB2: switching a carve on cuts the hole again");
+
+    {
+      PL_LOCK(world.m_World.GetWorld().GetWriteMarker());
+      world.m_pModule->UnregisterNavBlocker(carve);
+    }
+
+    world.StepUntilBuilt(vSector, 4);
+    world.m_World.Step(2);
+    Check(world.GetAreaAt(plVec3(3, 3, 0)) != 0xFF, "NB2: removing a carve blocker heals the hole");
+  }
 } // namespace
 
 void RunNavigationTests()
 {
   TestDefaultNavMeshInitializes();
   TestSectorStatus();
+  TestSectorStats();
   TestInvalidateDuringBuild();
   TestCrowdGridGrows();
   TestNavLinkIDs();
   TestUnknownNavmeshConfig();
   TestBlockersKeepGroundType();
   TestBlockerClosesNavLink();
+  TestBlockerClosesPolygons();
+  TestCarveBlocker();
+  TestLongPathIsContinued();
 }

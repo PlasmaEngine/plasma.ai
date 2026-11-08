@@ -3,6 +3,7 @@
 #include <EditorEngineProcessFramework/EngineProcess/EngineProcessMessages.h>
 #include <EditorFramework/Document/GameObjectDocument.h>
 #include <EditorFramework/IPC/EngineProcessConnection.h>
+#include <AiPlugin/Navigation/NavMeshStatus.h>
 #include <EditorPluginAi/Debugger/AiDebugSession.h>
 
 namespace
@@ -55,6 +56,18 @@ void plAiDebugSession::SetOverlay(plUInt32 uiOverlay, bool bOn)
 
   const plAiDebugOverlay& overlay = overlays[uiOverlay];
 
+  // overlays of a radio group show one at a time: turning one on turns the others of the group off
+  if (bOn && overlay.m_szRadioGroup != nullptr)
+  {
+    for (plUInt32 i = 0; i < overlays.GetCount(); ++i)
+    {
+      if (i != uiOverlay && overlays[i].m_szRadioGroup != nullptr && plStringUtils::IsEqual(overlays[i].m_szRadioGroup, overlay.m_szRadioGroup) && (m_Frame.m_uiOverlays & PL_BIT(i)) != 0)
+      {
+        SetOverlay(i, false);
+      }
+    }
+  }
+
   plChangeCVarMsgToEngine msg;
   msg.m_sCVarName = overlay.m_szCVar;
   if (overlay.m_bIntCVar)
@@ -78,6 +91,91 @@ void plAiDebugSession::SetWatchedOnly(bool bOn)
   plEditorEngineProcessConnection::GetSingleton()->SendMessage(&msg);
 
   m_Frame.m_bWatchedOnly = bOn;
+}
+
+void plAiDebugSession::SetIntCVar(const char* szName, plInt32 iValue)
+{
+  plChangeCVarMsgToEngine msg;
+  msg.m_sCVarName = szName;
+  msg.m_NewValue = iValue;
+  plEditorEngineProcessConnection::GetSingleton()->SendMessage(&msg);
+}
+
+plVec2I32 plAiDebugSession::GetSectorAt(const plVec3& vPosition) const
+{
+  const plAiDebugFrame::Navmesh& nav = m_Frame.m_Navmesh;
+  if (!nav.m_bPresent || nav.m_fSectorSize <= 0.0f)
+    return plVec2I32(-1, -1);
+
+  const plInt32 x = static_cast<plInt32>(plMath::Floor(vPosition.x / nav.m_fSectorSize + nav.m_uiSectorsX * 0.5f));
+  const plInt32 y = static_cast<plInt32>(plMath::Floor(vPosition.y / nav.m_fSectorSize + nav.m_uiSectorsY * 0.5f));
+
+  if (x < 0 || y < 0 || x >= static_cast<plInt32>(nav.m_uiSectorsX) || y >= static_cast<plInt32>(nav.m_uiSectorsY))
+    return plVec2I32(-1, -1);
+
+  return plVec2I32(x, y);
+}
+
+plVec2I32 plAiDebugSession::GetInspectedSector() const
+{
+  if (m_vPickedSector.x >= 0)
+    return m_vPickedSector;
+
+  const plAiDebugFrame::Navmesh& nav = m_Frame.m_Navmesh;
+  if (!nav.m_bPresent)
+    return plVec2I32(-1, -1);
+
+  for (const plAiDebugFrame::Agent& agent : m_Frame.m_Agents)
+  {
+    if (agent.m_Object == m_Watched)
+      return GetSectorAt(agent.m_vPosition);
+  }
+
+  // nothing watched: the first sector that went wrong, else the first one that is busy
+  const plAiDebugFrame::NavSector* pBusy = nullptr;
+
+  for (const plAiDebugFrame::NavSector& sector : nav.m_Sectors)
+  {
+    if (static_cast<plAiNavMeshSectorState>(sector.m_uiState) == plAiNavMeshSectorState::Failed)
+      return sector.m_vCoord;
+
+    if (pBusy == nullptr && static_cast<plAiNavMeshSectorState>(sector.m_uiState) != plAiNavMeshSectorState::Ready)
+      pBusy = &sector;
+  }
+
+  return pBusy != nullptr ? pBusy->m_vCoord : plVec2I32(-1, -1);
+}
+
+void plAiDebugSession::IssueSquadOrder(plStringView sSquad, plUInt8 uiIntent, bool bRegion, const plVec2& vRegionMin, const plVec2& vRegionMax, float fSeconds, bool bNoRetreat)
+{
+  m_PendingOrder = plAiDebugRequest::OrderCommand();
+  m_PendingOrder.m_Action = plAiDebugRequest::OrderCommand::Action::Issue;
+  m_PendingOrder.m_sSquad = sSquad;
+  m_PendingOrder.m_uiIntent = uiIntent;
+  m_PendingOrder.m_bRegion = bRegion;
+  m_PendingOrder.m_vRegionMin = vRegionMin;
+  m_PendingOrder.m_vRegionMax = vRegionMax;
+  m_PendingOrder.m_fSeconds = fSeconds;
+  m_PendingOrder.m_bNoRetreat = bNoRetreat;
+
+  // ask right away, so the order starts without waiting for the next poll
+  m_LastPoll = plTime::MakeZero();
+}
+
+void plAiDebugSession::CancelSquadOrder(plStringView sSquad)
+{
+  m_PendingOrder = plAiDebugRequest::OrderCommand();
+  m_PendingOrder.m_Action = plAiDebugRequest::OrderCommand::Action::Cancel;
+  m_PendingOrder.m_sSquad = sSquad;
+  m_LastPoll = plTime::MakeZero();
+}
+
+void plAiDebugSession::RebuildInspectedSector()
+{
+  m_bRebuildSector = true;
+
+  // ask right away, so the rebuild starts without waiting for the next poll
+  m_LastPoll = plTime::MakeZero();
 }
 
 void plAiDebugSession::SetWatched(const plUuid& object)
@@ -198,6 +296,9 @@ void plAiDebugSession::SendPoll()
   request.m_bCaptureEqs = m_bCaptureEqs;
   request.m_fHistorySince = m_fHistorySince;
   request.m_PickObject = m_PickObject;
+  request.m_vInspectSector = GetInspectedSector();
+  request.m_bRebuildSector = m_bRebuildSector;
+  request.m_Order = m_PendingOrder;
 
   plSimpleDocumentConfigMsgToEngine msg;
   msg.m_sWhatToDo = plAiDebugRequest::s_szWhatToDo;
@@ -212,6 +313,8 @@ void plAiDebugSession::SendPoll()
   {
     m_bWaiting = true;
     m_bCaptureEqs = false;
+    m_bRebuildSector = false;
+    m_PendingOrder = plAiDebugRequest::OrderCommand();
     m_PickObject = plUuid::MakeInvalid();
   }
 }

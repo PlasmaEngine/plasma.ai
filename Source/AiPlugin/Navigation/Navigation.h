@@ -5,6 +5,7 @@
 #include <DetourPathCorridor.h>
 #include <Foundation/Math/Angle.h>
 #include <Foundation/Math/Vec3.h>
+#include <Foundation/Types/UniquePtr.h>
 
 class plDebugRendererContext;
 
@@ -60,10 +61,18 @@ public:
     Searching,
   };
 
-  static constexpr plUInt32 MaxPathNodes = 64;
-  static constexpr plUInt32 MaxSearchNodes = MaxPathNodes * 8;
+  static constexpr plUInt32 MaxPathNodes = 256;
+  static constexpr plUInt32 MaxSearchNodes = 2048;
+
+  /// A corridor that is cut at MaxPathNodes and has this many polygons left is extended towards the target.
+  static constexpr plUInt32 ContinueAtPathNodes = MaxPathNodes / 2;
 
   State GetState() const { return m_State; }
+
+  /// \brief True when the corridor ends before the target (it hit MaxPathNodes or the search ran out of nodes) and is extended while the agent walks.
+  ///
+  /// GetState() reports FullPathFound for such a path as long as the search itself reached the target.
+  bool IsPathContinued() const { return m_bPathContinues; }
 
   void Update();
 
@@ -145,7 +154,22 @@ private:
   /// have failed because of the change, so it runs again instead of reporting NoPathFound
   plUInt32 m_uiSearchNavMeshGeneration = 0;
 
+  /// The corridor is cut before the target and gets extended from its last polygon. See IsPathContinued().
+  bool m_bPathContinues = false;
+
+  /// A sliced search from the corridor end to the target is running on m_pContinueQuery.
+  bool m_bContinueSearching = false;
+
+  /// Searches the rest of a long path while m_Query keeps serving the corridor. Created when the first long path needs it.
+  plUniquePtr<dtNavMeshQuery> m_pContinueQuery;
+
   bool UpdatePathSearch();
+
+  /// Extends a cut corridor once the agent has used up half of it.
+  void UpdatePathContinuation();
+
+  /// Stops extending the corridor and drops the running continuation search.
+  void ResetPathContinuation();
 
   /// NoPathFound, unless the navmesh changed since the search started; then the search starts over.
   void SetNoPathFound();

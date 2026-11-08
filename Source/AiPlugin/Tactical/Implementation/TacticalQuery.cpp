@@ -44,6 +44,9 @@ plAiTacticalQueryDesc plAiTacticalQueryDesc::MakeFromPreset(plAiTacticalQueryPre
       addScorer(plAiTacticalScorerDesc::Type::CoverFacingThreat, true, 0.2f /*min facing dot*/, 0, 1);
       addScorer(plAiTacticalScorerDesc::Type::LosToThreat, true, 0 /*prefer blocked*/, 0, 1.5f);
       addScorer(plAiTacticalScorerDesc::Type::DistanceBandToQuerier, false, 0, fRadiusMax * 0.4f, 1.0f);
+      // the team's threat map: points the known enemies cannot hurt, and never one inside a danger area
+      addScorer(plAiTacticalScorerDesc::Type::Threat, false, 0, 0, 0.75f);
+      addScorer(plAiTacticalScorerDesc::Type::Danger, true, 0.5f, 0, 0.0f);
       break;
 
     case plAiTacticalQueryPreset::FlankTarget:
@@ -53,6 +56,7 @@ plAiTacticalQueryDesc plAiTacticalQueryDesc::MakeFromPreset(plAiTacticalQueryPre
       addScorer(plAiTacticalScorerDesc::Type::DirectionFromThreat, false, flankAngle.GetRadian(), 0, 1.5f);
       addScorer(plAiTacticalScorerDesc::Type::DistanceBandToQuerier, false, 0, fRadiusMax * 1.5f, 0.5f);
       addScorer(plAiTacticalScorerDesc::Type::ReachableApprox, false, 0, 0, 1.0f);
+      addScorer(plAiTacticalScorerDesc::Type::Danger, true, 0.5f, 0, 0.0f); // flank around the grenade, not through it
       break;
 
     case plAiTacticalQueryPreset::RetreatFromTarget:
@@ -63,6 +67,8 @@ plAiTacticalQueryDesc plAiTacticalQueryDesc::MakeFromPreset(plAiTacticalQueryPre
       addScorer(plAiTacticalScorerDesc::Type::DistanceBandToThreat, false, fCurThreatDist + fRadiusMax * 0.5f, fCurThreatDist + fRadiusMax * 4.0f, 1.5f);
       addScorer(plAiTacticalScorerDesc::Type::LosToThreat, false, 0 /*prefer blocked*/, 0, 0.75f);
       addScorer(plAiTacticalScorerDesc::Type::ReachableApprox, false, 0, 0, 1.0f);
+      addScorer(plAiTacticalScorerDesc::Type::Threat, false, 0, 0, 0.75f);
+      addScorer(plAiTacticalScorerDesc::Type::Danger, true, 0.5f, 0, 0.0f);
       break;
     }
 
@@ -70,6 +76,7 @@ plAiTacticalQueryDesc plAiTacticalQueryDesc::MakeFromPreset(plAiTacticalQueryPre
       desc.m_Generator = Generator::NavmeshRandom;
       desc.m_vCenter = vQuerier;
       addScorer(plAiTacticalScorerDesc::Type::ReachableApprox, false, 0, 0, 1.0f);
+      addScorer(plAiTacticalScorerDesc::Type::Danger, true, 0.5f, 0, 0.0f);
       break;
 
     case plAiTacticalQueryPreset::HideFromTarget:
@@ -82,6 +89,8 @@ plAiTacticalQueryDesc plAiTacticalQueryDesc::MakeFromPreset(plAiTacticalQueryPre
       // so concealed-but-not-facing points (corners, far sides of blocks) survive to the LOS check.
       addScorer(plAiTacticalScorerDesc::Type::LosToThreat, true, 0 /*prefer blocked*/, 0, 1.5f);
       addScorer(plAiTacticalScorerDesc::Type::DistanceBandToQuerier, false, 0, fRadiusMax * 0.4f, 1.0f);
+      addScorer(plAiTacticalScorerDesc::Type::Threat, false, 0, 0, 0.75f);
+      addScorer(plAiTacticalScorerDesc::Type::Danger, true, 0.5f, 0, 0.0f);
       break;
   }
 
@@ -101,8 +110,12 @@ struct plAiTacticalCandidateSet
     plAiCoverPointHandle m_hCover;
     float m_fScoreSum = 0.0f;
     float m_fWeightSum = 0.0f;
+    float m_fMultiplier = 1.0f; ///< danger: scales the final score
     float m_fFinal = 0.0f;
+    float m_fProtection = 1.0f; ///< the line-of-sight scorer's value, 1 where it did not run
     bool m_bDiscarded = false;
+
+    void UpdateFinal() { m_fFinal = ((m_fWeightSum > 0.0f) ? (m_fScoreSum / m_fWeightSum) : 1.0f) * m_fMultiplier; }
   };
 
   plHybridArray<Cand, 32> m_Candidates;
@@ -372,6 +385,19 @@ void plAiTacticalWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiS
           fScore = desc.m_bHasThreat ? TrapezoidScore((cand.m_vPosition - desc.m_vThreat).GetAsVec2().GetLength(), scorer.m_fParam0, scorer.m_fParam1) : 1.0f;
           break;
 
+        case plAiTacticalScorerDesc::Type::Threat:
+          // without a map nothing is known: neutral
+          fScore = 1.0f - (slot.m_pThreat != nullptr ? slot.m_pThreat->GetThreat(cand.m_vPosition) : 0.0f);
+          break;
+
+        case plAiTacticalScorerDesc::Type::Danger:
+        {
+          const float fDanger = slot.m_pThreat != nullptr ? slot.m_pThreat->GetDanger(cand.m_vPosition) : 0.0f;
+          cand.m_fMultiplier *= 1.0f - fDanger;
+          fScore = (scorer.m_fParam0 > 0.0f && fDanger >= scorer.m_fParam0) ? 0.0f : 1.0f;
+          break;
+        }
+
         case plAiTacticalScorerDesc::Type::DirectionFromThreat:
         {
           if (!desc.m_bHasThreat)
@@ -414,8 +440,7 @@ void plAiTacticalWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiS
     }
     else
     {
-      auto& cand = set.m_Candidates[i];
-      cand.m_fFinal = (cand.m_fWeightSum > 0.0f) ? (cand.m_fScoreSum / cand.m_fWeightSum) : 1.0f;
+      set.m_Candidates[i].UpdateFinal();
     }
   }
 
@@ -459,9 +484,10 @@ void plAiTacticalWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiS
         continue;
       }
 
+      cand.m_fProtection = fScore;
       cand.m_fScoreSum += pLosScorer->m_fWeight * fScore;
       cand.m_fWeightSum += pLosScorer->m_fWeight;
-      cand.m_fFinal = cand.m_fScoreSum / cand.m_fWeightSum;
+      cand.UpdateFinal();
     }
 
     // only LOS-checked candidates that passed stay eligible
@@ -504,7 +530,7 @@ void plAiTacticalWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiS
           const float fScore = (fT > 1.0f) ? 1.0f : 0.25f;
           cand.m_fScoreSum += pReachScorer->m_fWeight * fScore;
           cand.m_fWeightSum += pReachScorer->m_fWeight;
-          cand.m_fFinal = cand.m_fScoreSum / cand.m_fWeightSum;
+          cand.UpdateFinal();
         }
       }
 
@@ -528,10 +554,22 @@ void plAiTacticalWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiS
     result.m_vPosition = cand.m_vPosition;
     result.m_fScore = cand.m_fFinal;
     result.m_CoverHandle = cand.m_hCover;
+    result.m_fProtection = cand.m_fProtection;
+    result.m_fThreat = slot.m_pThreat != nullptr ? slot.m_pThreat->GetThreat(cand.m_vPosition) : 0.0f;
+    result.m_fDanger = slot.m_pThreat != nullptr ? slot.m_pThreat->GetDanger(cand.m_vPosition) : 0.0f;
   }
 
   slot.m_Result.m_Status = slot.m_Result.m_TopN.IsEmpty() ? plAiTacticalQueryResult::Status::NoResult : plAiTacticalQueryResult::Status::Ready;
   slot.m_CompletedAt = GetWorld()->GetClock().GetAccumulatedTime();
+
+  // the AI Debugger shows what the watched agent's latest query chose between
+  if (!desc.m_hClaimant.IsInvalidated() && desc.m_hClaimant == m_hDebugWatched)
+  {
+    PL_LOCK(m_DebugMutex);
+    m_DebugCandidates = slot.m_Result.m_TopN;
+    m_DebugCandidateTime = slot.m_CompletedAt;
+    m_bHasDebugCandidates = true;
+  }
 }
 
 //////////////////////////////////////////////////////////////////////////

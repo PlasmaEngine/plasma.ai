@@ -1,5 +1,6 @@
 #pragma once
 
+#include <AiPlugin/Tactical/SquadTypes.h>
 #include <AiPlugin/UtilityAI/Decision/AiArchetypeResource.h>
 #include <AiPlugin/UtilityAI/Perception/AiPerception.h>
 #include <Core/World/Component.h>
@@ -65,6 +66,10 @@ public:
   /// \brief Makes the agent decide as soon as the archetype's wake spacing allows.
   void RequestDecision(); // [ scriptable ]
 
+  /// \brief Ends the active behavior now, even while it is locked, and decides again. The behavior that wins again
+  /// starts from the beginning: a take-cover picks its cover again.
+  void InterruptBehavior(); // [ scriptable ]
+
   /// \brief A disabled behavior doesn't compete. Disabling the active behavior ends it, even while locked.
   void SetBehaviorEnabled(const char* szBehavior, bool bEnabled); // [ scriptable ]
 
@@ -77,6 +82,15 @@ public:
 
   /// \brief Clears the current command (Ai_CommandActive becomes false).
   void CancelCommand(); // [ scriptable ]
+
+  /// \brief Orders the agent's squad (its SquadId), replacing the order it has. The squad's members follow the intent
+  /// until the duration is up (0 = until CancelSquadOrder). A radius above zero adds a region: a square of that
+  /// half-size around the position, which the members hold, advance into or fall back to. NoRetreat keeps losses from
+  /// breaking the order.
+  void IssueSquadOrder(plEnum<plAiSquadIntent> intent, const plVec3& vRegionCenter, float fRegionRadius, float fDurationSeconds, bool bNoRetreat); // [ scriptable ]
+
+  /// \brief Ends the order of the agent's squad.
+  void CancelSquadOrder(); // [ scriptable ]
 
   /// \brief The name of the active behavior, empty when idle.
   const char* GetActiveBehavior() const; // [ scriptable ]

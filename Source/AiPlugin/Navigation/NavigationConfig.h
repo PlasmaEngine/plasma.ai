@@ -56,6 +56,27 @@ struct PL_AIPLUGIN_DLL plAiNavObstacleMode
 
 PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiNavObstacleMode);
 
+/// \brief How a nav blocker volume (plAiNavBlockerComponent) affects pathing.
+///
+/// Block and Avoid are runtime patches on polygons the build split out under the volume, so
+/// toggling them is instant. Carve cuts the volume out of the navmesh like solid geometry
+/// (plus the agent radius); toggling or moving it rebuilds the overlapping sectors.
+struct PL_AIPLUGIN_DLL plAiNavBlockerMode
+{
+  using StorageType = plUInt8;
+
+  enum Enum
+  {
+    Block, ///< polygons in the volume are flagged Blocked - impassable, toggles instantly
+    Avoid, ///< polygons in the volume stay walkable but cost extra to cross, toggles instantly
+    Carve, ///< the volume is a hole in the navmesh - toggling or moving it rebuilds the overlapping sectors
+
+    Default = Block
+  };
+};
+
+PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiNavBlockerMode);
+
 struct PL_AIPLUGIN_DLL plAiNavmeshConfig
 {
   plString m_sName;

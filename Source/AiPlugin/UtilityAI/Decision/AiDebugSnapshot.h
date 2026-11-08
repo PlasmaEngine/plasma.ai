@@ -30,6 +30,7 @@ enum class plAiDecisionOutcome : plUInt8
   Done,              ///< the active behavior finished
   Failed,            ///< the active behavior failed
   Disabled,          ///< the active behavior was disabled for this agent
+  Interrupted,       ///< the active behavior was ended from outside, e.g. its cover is in a danger area
 };
 
 PL_AIPLUGIN_DLL const char* plAiDecisionOutcomeName(plAiDecisionOutcome outcome);

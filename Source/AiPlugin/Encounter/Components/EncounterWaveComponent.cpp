@@ -5,7 +5,7 @@
 #include <Core/WorldSerializer/WorldWriter.h>
 
 // clang-format off
-PL_BEGIN_COMPONENT_TYPE(plAiEncounterWaveComponent, 1, plComponentMode::Static)
+PL_BEGIN_COMPONENT_TYPE(plAiEncounterWaveComponent, 2, plComponentMode::Static)
 {
   PL_BEGIN_PROPERTIES
   {
@@ -20,6 +20,10 @@ PL_BEGIN_COMPONENT_TYPE(plAiEncounterWaveComponent, 1, plComponentMode::Static)
     PL_MEMBER_PROPERTY("HoldWhenIntense", m_bHoldWhenIntense)->AddAttributes(new plDefaultValueAttribute(true)),
     PL_MEMBER_PROPERTY("MaxHold", m_fMaxHold)->AddAttributes(new plDefaultValueAttribute(45.0f), new plClampValueAttribute(0.0f, plVariant())),
     PL_MEMBER_PROPERTY("ReleaseFunction", m_sReleaseFunction)->AddAttributes(new plDefaultValueAttribute("Activate")),
+    PL_ENUM_MEMBER_PROPERTY("Order", plAiSquadIntent, m_OrderIntent)->AddAttributes(new plGroupAttribute("Squad order")),
+    PL_MEMBER_PROPERTY("OrderDuration", m_fOrderDuration)->AddAttributes(new plDefaultValueAttribute(30.0f), new plClampValueAttribute(0.0f, plVariant())),
+    PL_MEMBER_PROPERTY("OrderRadius", m_fOrderRadius)->AddAttributes(new plClampValueAttribute(0.0f, plVariant())),
+    PL_MEMBER_PROPERTY("OrderNoRetreat", m_bOrderNoRetreat),
   }
   PL_END_PROPERTIES;
 
@@ -51,6 +55,10 @@ void plAiEncounterWaveComponent::SerializeComponent(plWorldWriter& inout_stream)
   s << m_bHoldWhenIntense;
   s << m_fMaxHold;
   s << m_sReleaseFunction;
+  s << m_OrderIntent;
+  s << m_fOrderDuration;
+  s << m_fOrderRadius;
+  s << m_bOrderNoRetreat;
 }
 
 void plAiEncounterWaveComponent::DeserializeComponent(plWorldReader& inout_stream)
@@ -69,6 +77,14 @@ void plAiEncounterWaveComponent::DeserializeComponent(plWorldReader& inout_strea
   s >> m_bHoldWhenIntense;
   s >> m_fMaxHold;
   s >> m_sReleaseFunction;
+
+  if (inout_stream.GetComponentTypeVersion(GetStaticRTTI()) >= 2)
+  {
+    s >> m_OrderIntent;
+    s >> m_fOrderDuration;
+    s >> m_fOrderRadius;
+    s >> m_bOrderNoRetreat;
+  }
 }
 
 void plAiEncounterWaveComponent::SetSpawnerReference(const char* szReference)

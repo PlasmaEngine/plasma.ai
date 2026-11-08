@@ -4,6 +4,8 @@
 #include <AiPlugin/Eqs/EqsWorldModule.h>
 #include <AiPlugin/Navigation/NavMeshWorldModule.h>
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/Tactical/ThreatWorldModule.h>
+#include <AiPlugin/UtilityAI/Components/AiAgentComponent.h>
 #include <Core/Interfaces/PhysicsWorldModule.h>
 #include <Core/World/World.h>
 #include <Foundation/Configuration/CVar.h>
@@ -147,6 +149,20 @@ plAiEqsWorldModule::QueryID plAiEqsWorldModule::SubmitQuery(const plAiEqsQueryRe
   if (!params.m_hQuerier.IsInvalidated())
   {
     GetWorld()->TryGetObject(params.m_hQuerier, pQuerier);
+  }
+
+  // the querier team's threat map as it is now; the ThreatMap test on the worker reads this copy
+  slot.m_pThreat = nullptr;
+
+  if (pQuerier != nullptr)
+  {
+    if (const auto* pThreatModule = GetWorld()->GetModuleReadOnly<plAiThreatWorldModule>())
+    {
+      if (const plAiAgentComponent* pAgent = nullptr; pQuerier->TryGetComponentOfBaseType(pAgent))
+      {
+        slot.m_pThreat = pThreatModule->GetSnapshot(pAgent->GetResolvedTeam());
+      }
+    }
   }
 
   if (params.m_bHasQuerierPosition)

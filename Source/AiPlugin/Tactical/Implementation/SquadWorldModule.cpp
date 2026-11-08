@@ -35,6 +35,48 @@ PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiSquadWorldModule, 1, plRTTINoAllocator)
 PL_END_DYNAMIC_REFLECTED_TYPE;
 // clang-format on
 
+plVec2 plAiSquadOrder::GetRegionSlot(plUInt32 uiIndex, plUInt32 uiCount) const
+{
+  if (!m_bHasRegion || uiCount == 0)
+    return plVec2::MakeZero();
+
+  // a grid as square as the count allows, the spots in the middle of its cells
+  const plUInt32 uiColumns = static_cast<plUInt32>(plMath::Ceil(plMath::Sqrt(static_cast<float>(uiCount))));
+  const plUInt32 uiRows = (uiCount + uiColumns - 1) / uiColumns;
+
+  const plUInt32 uiColumn = uiIndex % uiColumns;
+  const plUInt32 uiRow = uiIndex / uiColumns;
+
+  return plVec2(plMath::Lerp(m_vRegionMin.x, m_vRegionMax.x, (uiColumn + 0.5f) / uiColumns), plMath::Lerp(m_vRegionMin.y, m_vRegionMax.y, (uiRow + 0.5f) / uiRows));
+}
+
+namespace
+{
+  const char* GetIntentName(plAiSquadIntent::Enum intent)
+  {
+    switch (intent)
+    {
+      case plAiSquadIntent::Engage:
+        return "Engage";
+      case plAiSquadIntent::Advance:
+        return "Advance";
+      case plAiSquadIntent::Hold:
+        return "Hold";
+      case plAiSquadIntent::Retreat:
+        return "Retreat";
+      default:
+        return "None";
+    }
+  }
+
+  bool IsOrderIntent(plAiSquadIntent::Enum intent)
+  {
+    return intent == plAiSquadIntent::Engage || intent == plAiSquadIntent::Advance || intent == plAiSquadIntent::Hold || intent == plAiSquadIntent::Retreat;
+  }
+
+  constexpr plUInt32 s_uiMaxHistory = 12;
+} // namespace
+
 plAiSquadWorldModule::plAiSquadWorldModule(plWorld* pWorld)
   : plWorldModule(pWorld)
 {
@@ -102,6 +144,14 @@ plAiSquadWorldModule::MemberID plAiSquadWorldModule::RegisterMember(const plHash
     newSquad.m_bInUse = true;
 
     m_SquadByName[sSquadId] = uiSquad;
+
+    // an order that was given before the squad existed (an encounter wave releases its order with the wave)
+    PendingOrder pending;
+    if (m_PendingOrders.TryGetValue(sSquadId, pending))
+    {
+      StartOrder(newSquad, pending.m_Order, pending.m_Start);
+      m_PendingOrders.Remove(sSquadId);
+    }
   }
 
   MemberID id = InvalidMemberID;
@@ -197,12 +247,209 @@ plUInt32 plAiSquadWorldModule::GetSquadSize(const plTempHashedString& sSquadId) 
   return uiActive;
 }
 
+//////////////////////////////////////////////////////////////////////////
+// orders
+
+void plAiSquadWorldModule::IssueOrder(const plHashedString& sSquadId, const plAiSquadOrder& order)
+{
+  if (sSquadId.IsEmpty())
+    return;
+
+  if (!IsOrderIntent(order.m_Intent))
+  {
+    plLog::Warning("Squad order for '{}' ignored: the intent must be Engage, Advance, Hold or Retreat.", sSquadId);
+    return;
+  }
+
+  const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
+
+  plUInt32 uiSquad = plInvalidIndex;
+  if (m_SquadByName.TryGetValue(sSquadId, uiSquad))
+  {
+    StartOrder(m_Squads[uiSquad], order, now);
+    m_PendingOrders.Remove(sSquadId);
+    return;
+  }
+
+  PendingOrder& pending = m_PendingOrders[sSquadId];
+  pending.m_Order = order;
+  pending.m_Start = now;
+}
+
+void plAiSquadWorldModule::CancelOrder(const plTempHashedString& sSquadId)
+{
+  plUInt32 uiSquad = plInvalidIndex;
+  if (m_SquadByName.TryGetValue(sSquadId, uiSquad) && m_Squads[uiSquad].m_bHasOrder)
+  {
+    EndOrder(m_Squads[uiSquad], GetWorld()->GetClock().GetAccumulatedTime(), "cancelled", false);
+  }
+
+  for (auto it = m_PendingOrders.GetIterator(); it.IsValid(); ++it)
+  {
+    if (it.Key() == sSquadId)
+    {
+      m_PendingOrders.Remove(it);
+      break;
+    }
+  }
+}
+
+bool plAiSquadWorldModule::GetOrder(const plTempHashedString& sSquadId, plAiSquadOrder& out_order, plTime& out_remaining) const
+{
+  plUInt32 uiSquad = plInvalidIndex;
+  if (!m_SquadByName.TryGetValue(sSquadId, uiSquad) || !m_Squads[uiSquad].m_bHasOrder)
+    return false;
+
+  const Squad& squad = m_Squads[uiSquad];
+  const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
+
+  out_order = squad.m_Order;
+  out_remaining = squad.m_Order.m_Duration.IsPositive() ? plMath::Max(plTime::MakeZero(), squad.m_Order.m_Duration - (now - squad.m_OrderStart)) : plTime::MakeZero();
+  return true;
+}
+
+void plAiSquadWorldModule::StartOrder(Squad& squad, const plAiSquadOrder& order, plTime start)
+{
+  if (squad.m_bHasOrder)
+  {
+    EndOrder(squad, start, "replaced", true);
+  }
+
+  squad.m_bHasOrder = true;
+  squad.m_Order = order;
+  squad.m_OrderStart = start;
+  squad.m_bOrderLossNoted = false;
+
+  plStringBuilder sText;
+  sText.SetFormat("Order {} issued by {}", GetIntentName(order.m_Intent), order.m_sIssuer.IsEmpty() ? plStringView("code") : order.m_sIssuer.GetView());
+
+  if (order.m_Duration.IsPositive())
+  {
+    sText.AppendFormat(" for {} s", plArgF(order.m_Duration.GetSeconds(), 0));
+  }
+
+  if (order.m_bNoRetreat)
+  {
+    sText.Append(" \xC2\xB7 no retreat");
+  }
+
+  AddHistory(squad, start, sText);
+
+  // the squad follows at once, instead of at the next dwell
+  SetIntent(squad, order.m_Intent, start, {});
+}
+
+void plAiSquadWorldModule::EndOrder(Squad& squad, plTime now, plStringView sHow, bool bKeepIntentClock)
+{
+  if (!squad.m_bHasOrder)
+    return;
+
+  plStringBuilder sText;
+  sText.SetFormat("Order {} {}", GetIntentName(squad.m_Order.m_Intent), sHow);
+  AddHistory(squad, now, sText);
+
+  squad.m_bHasOrder = false;
+  squad.m_Order = plAiSquadOrder();
+
+  if (!bKeepIntentClock)
+  {
+    // the squad's own reasoning takes over right away: its dwell has long passed
+    squad.m_IntentSince = now - plTime::MakeFromSeconds(1.0e6);
+  }
+}
+
+void plAiSquadWorldModule::AddHistory(Squad& squad, plTime now, plStringView sText)
+{
+  Squad::HistoryEntry& entry = squad.m_History.ExpandAndGetRef();
+  entry.m_Time = now;
+  entry.m_sText = sText;
+
+  while (squad.m_History.GetCount() > s_uiMaxHistory)
+  {
+    squad.m_History.PopFront();
+  }
+}
+
+void plAiSquadWorldModule::SetIntent(Squad& squad, plAiSquadIntent::Enum intent, plTime now, plStringView sHow)
+{
+  if (squad.m_Intent == intent)
+    return;
+
+  squad.m_Intent = intent;
+  squad.m_IntentSince = now;
+
+  if (!sHow.IsEmpty())
+  {
+    plStringBuilder sText;
+    sText.SetFormat("{} intent {}", sHow, GetIntentName(intent));
+    AddHistory(squad, now, sText);
+  }
+}
+
+void plAiSquadWorldModule::GetSquadInfos(plDynamicArray<SquadInfo>& out_squads) const
+{
+  out_squads.Clear();
+
+  const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
+
+  for (const Squad& squad : m_Squads)
+  {
+    if (!squad.m_bInUse || squad.m_Members.IsEmpty())
+      continue;
+
+    SquadInfo& info = out_squads.ExpandAndGetRef();
+    info.m_sId = squad.m_sId;
+    info.m_uiPeakSize = squad.m_uiPeakSize;
+    info.m_uiLosses = squad.m_uiLosses;
+    info.m_uiRetreatLosses = static_cast<plUInt32>(plMath::Ceil(plMath::Clamp(cvar_SquadRetreatLossFraction.GetValue(), 0.05f, 1.0f) * squad.m_uiPeakSize));
+    info.m_Intent = squad.m_Intent;
+    info.m_bHasOrder = squad.m_bHasOrder;
+    info.m_Order = squad.m_Order;
+    info.m_fOrderRemaining = (squad.m_bHasOrder && squad.m_Order.m_Duration.IsPositive()) ? plMath::Max(0.0, (squad.m_Order.m_Duration - (now - squad.m_OrderStart)).GetSeconds()) : 0.0;
+    info.m_vHome = squad.m_vHome;
+    info.m_bHasTarget = squad.m_fSharedConfidence > 0.1f;
+    info.m_vTargetPosition = squad.m_vSharedTargetPos;
+
+    for (const MemberID id : squad.m_Members)
+    {
+      const Member& member = m_Members[id];
+
+      const plComponent* pComponent = nullptr;
+      if (!GetWorld()->TryGetComponent(member.m_hComponent, pComponent))
+        continue;
+
+      MemberInfo& memberInfo = info.m_Members.ExpandAndGetRef();
+      memberInfo.m_hOwner = pComponent->GetOwner()->GetHandle();
+      memberInfo.m_vPosition = pComponent->GetOwner()->GetGlobalPosition();
+      memberInfo.m_bAttackToken = member.m_bAttackToken;
+      memberInfo.m_bMoveToken = member.m_bMoveToken;
+    }
+
+    for (plUInt32 i = squad.m_History.GetCount(); i-- > 0;)
+    {
+      HistoryInfo& entry = info.m_History.ExpandAndGetRef();
+      entry.m_fTime = squad.m_History[i].m_Time.GetSeconds();
+      entry.m_sText = squad.m_History[i].m_sText;
+    }
+  }
+}
+
 void plAiSquadWorldModule::UpdateSquads(const UpdateContext& ctxt)
 {
+  const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
+
+  // orders for squads that never formed run out too
+  for (auto it = m_PendingOrders.GetIterator(); it.IsValid();)
+  {
+    if (it.Value().m_Order.m_Duration.IsPositive() && (now - it.Value().m_Start) >= it.Value().m_Order.m_Duration)
+      it = m_PendingOrders.Remove(it);
+    else
+      ++it;
+  }
+
   if (m_Squads.IsEmpty())
     return;
 
-  const plTime now = GetWorld()->GetClock().GetAccumulatedTime();
   const plUInt32 uiMaxTicks = static_cast<plUInt32>(plMath::Clamp<plInt32>(cvar_SquadMaxTicksPerFrame, 1, 64));
 
   plUInt32 uiTicked = 0;
@@ -273,6 +520,10 @@ void plAiSquadWorldModule::SweepMembers(Squad& squad)
     {
       squad.m_Members.RemoveAtAndCopy(i);
       ++squad.m_uiLosses;
+
+      plStringBuilder sLost;
+      sLost.SetFormat("Member lost \xC2\xB7 {} loss{}", squad.m_uiLosses, squad.m_uiLosses > 1 ? "es" : "");
+      AddHistory(squad, GetWorld()->GetClock().GetAccumulatedTime(), sLost);
 
       m_Members[id].m_bInUse = false;
       m_Members[id].m_hComponent.Invalidate();
@@ -422,25 +673,48 @@ void plAiSquadWorldModule::EvaluateIntent(Squad& squad, plTime now)
   plAiSquadIntent::Enum newIntent = static_cast<plAiSquadIntent::Enum>(squad.m_Intent.GetValue());
 
   const plTime retreatHold = plTime::Seconds(plMath::Max(0.0f, cvar_SquadRetreatHoldTime.GetValue()));
+  const plUInt16 uiRetreatLosses = static_cast<plUInt16>(plMath::Ceil(plMath::Clamp(cvar_SquadRetreatLossFraction.GetValue(), 0.05f, 1.0f) * squad.m_uiPeakSize));
+  const bool bLossesReached = squad.m_uiLosses >= uiRetreatLosses && squad.m_uiPeakSize >= 2;
+
+  // an order decides the intent, until it runs out or the losses break it
+  if (squad.m_bHasOrder)
+  {
+    if (squad.m_Order.m_Duration.IsPositive() && (now - squad.m_OrderStart) >= squad.m_Order.m_Duration)
+    {
+      EndOrder(squad, now, "expired", false);
+      EvaluateIntent(squad, now); // the dwell has passed: the automatic intent follows right away
+      return;
+    }
+
+    if (bLossesReached && !squad.m_Order.m_bNoRetreat)
+    {
+      EndOrder(squad, now, "broken by losses", true);
+    }
+    else
+    {
+      if (bLossesReached && !squad.m_bOrderLossNoted)
+      {
+        squad.m_bOrderLossNoted = true;
+        AddHistory(squad, now, "Losses reached the retreat limit \xC2\xB7 no retreat keeps the order");
+      }
+
+      SetIntent(squad, static_cast<plAiSquadIntent::Enum>(squad.m_Order.m_Intent.GetValue()), now, {});
+      return;
+    }
+  }
 
   // a retreat that has held long enough is over: the survivors are the squad now, only new losses retreat again
   if (squad.m_Intent == plAiSquadIntent::Retreat && (now - squad.m_IntentSince) >= retreatHold && squad.m_uiLosses > 0)
   {
     squad.m_uiLosses = 0;
     squad.m_uiPeakSize = static_cast<plUInt16>(squad.m_Members.GetCount());
+    AddHistory(squad, now, "Retreat held \xC2\xB7 the survivors are the squad");
   }
 
   // retreat escalates immediately and holds for a while
-  const plUInt16 uiRetreatLosses = static_cast<plUInt16>(plMath::Ceil(plMath::Clamp(cvar_SquadRetreatLossFraction.GetValue(), 0.05f, 1.0f) * squad.m_uiPeakSize));
-
-  if (squad.m_uiLosses >= uiRetreatLosses && squad.m_uiPeakSize >= 2)
+  if (bLossesReached && squad.m_uiLosses >= uiRetreatLosses)
   {
-    if (squad.m_Intent != plAiSquadIntent::Retreat)
-    {
-      squad.m_Intent = plAiSquadIntent::Retreat;
-      squad.m_IntentSince = now;
-    }
-
+    SetIntent(squad, plAiSquadIntent::Retreat, now, "Automatic");
     return;
   }
 
@@ -477,11 +751,7 @@ void plAiSquadWorldModule::EvaluateIntent(Squad& squad, plTime now)
     newIntent = plAiSquadIntent::Hold;
   }
 
-  if (newIntent != squad.m_Intent)
-  {
-    squad.m_Intent = newIntent;
-    squad.m_IntentSince = now;
-  }
+  SetIntent(squad, newIntent, now, "Automatic");
 }
 
 void plAiSquadWorldModule::AssignAttackTokens(Squad& squad, plTime now)
@@ -590,6 +860,14 @@ void plAiSquadWorldModule::AssignMoveTokensAndPositions(Squad& squad, plTime now
       m_Members[id].m_bMoveToken = true;
     }
 
+    // a retreat order with a region falls back into it
+    if (squad.m_bHasOrder && squad.m_Order.m_bHasRegion)
+    {
+      const plVec2 vCenter = squad.m_Order.GetRegionCenter();
+      squad.m_vSharedMovePos = vCenter.GetAsVec3(squad.m_vHome.z);
+      return;
+    }
+
     // the rally point is chosen once per retreat: computed from the moving centroid every tick, it would move with the
     // squad and the retreat would never arrive
     if (squad.m_RallyChosenFor == squad.m_IntentSince)
@@ -656,11 +934,16 @@ void plAiSquadWorldModule::PublishMemberEntries(Squad& squad)
   static const plHashedString sSquadIntent = plMakeHashedString("Ai_SquadIntent");
   static const plHashedString sSquadMovePos = plMakeHashedString("Ai_SquadMovePos");
 
-  const float fStep = plMath::Max(1.0f, cvar_SquadBoundStep.GetValue());
+  static const plHashedString sOrderActive = plMakeHashedString("Ai_SquadOrderActive");
+  static const plHashedString sRegionCenter = plMakeHashedString("Ai_SquadRegionCenter");
 
-  for (MemberID id : squad.m_Members)
+  const float fStep = plMath::Max(1.0f, cvar_SquadBoundStep.GetValue());
+  const bool bRegion = squad.m_bHasOrder && squad.m_Order.m_bHasRegion;
+  const plUInt32 uiMembers = squad.m_Members.GetCount();
+
+  for (plUInt32 uiMember = 0; uiMember < uiMembers; ++uiMember)
   {
-    Member& member = m_Members[id];
+    Member& member = m_Members[squad.m_Members[uiMember]];
 
     if (!member.m_bHasBlackboard)
       continue;
@@ -688,7 +971,28 @@ void plAiSquadWorldModule::PublishMemberEntries(Squad& squad)
     // per-member move destination
     plVec3 vMovePos = member.m_vPosition;
 
-    if (memberIntent == plAiSquadIntent::Retreat)
+    if (bRegion)
+    {
+      // an order with a region: a spot of its own inside it. An advance gets there in bounds, the rest go straight to it
+      const plVec3 vSlot = squad.m_Order.GetRegionSlot(uiMember, uiMembers).GetAsVec3(member.m_vPosition.z);
+
+      if (memberIntent == plAiSquadIntent::Advance)
+      {
+        plVec3 vToSlot = vSlot - member.m_vPosition;
+        vToSlot.z = 0;
+        const float fDist = vToSlot.GetLength();
+
+        if (fDist > 0.1f)
+        {
+          vMovePos = member.m_vPosition + vToSlot * (plMath::Min(fStep, fDist) / fDist);
+        }
+      }
+      else
+      {
+        vMovePos = vSlot;
+      }
+    }
+    else if (memberIntent == plAiSquadIntent::Retreat)
     {
       vMovePos = squad.m_vSharedMovePos;
     }
@@ -705,6 +1009,8 @@ void plAiSquadWorldModule::PublishMemberEntries(Squad& squad)
     }
 
     pBlackboard->SetEntryValue(sSquadMovePos, vMovePos);
+    pBlackboard->SetEntryValue(sOrderActive, squad.m_bHasOrder);
+    pBlackboard->SetEntryValue(sRegionCenter, bRegion ? squad.m_Order.GetRegionCenter().GetAsVec3(member.m_vPosition.z) : member.m_vPosition);
   }
 }
 
@@ -775,7 +1081,45 @@ void plAiSquadWorldModule::DrawSquadDebug(const Squad& squad)
   }
 
   sText.SetFormat("{}: {} ({} members, {} losses)", squad.m_sId, sIntent, squad.m_Members.GetCount(), squad.m_uiLosses);
+
+  if (squad.m_bHasOrder)
+  {
+    sText.AppendFormat(" \xC2\xB7 order from {}", squad.m_Order.m_sIssuer.IsEmpty() ? plStringView("code") : squad.m_Order.m_sIssuer.GetView());
+  }
+
   plDebugRenderer::Draw3DText(GetWorld(), sText, vCentroid + plVec3(0, 0, 1.0f), squadColor);
+
+  DrawOrder(squad);
+}
+
+void plAiSquadWorldModule::DrawOrder(const Squad& squad)
+{
+  if (!squad.m_bHasOrder || !squad.m_Order.m_bHasRegion)
+    return;
+
+  const plAiSquadOrder& order = squad.m_Order;
+  const float fZ = squad.m_vHome.z + 0.2f;
+  const plColor color = plColorGammaUB(0xcd, 0x8c, 0x96);
+
+  const plVec3 corners[4] = {
+    plVec3(order.m_vRegionMin.x, order.m_vRegionMin.y, fZ),
+    plVec3(order.m_vRegionMax.x, order.m_vRegionMin.y, fZ),
+    plVec3(order.m_vRegionMax.x, order.m_vRegionMax.y, fZ),
+    plVec3(order.m_vRegionMin.x, order.m_vRegionMax.y, fZ),
+  };
+
+  plHybridArray<plDebugRenderer::Line, 4> lines;
+
+  for (plUInt32 i = 0; i < 4; ++i)
+  {
+    plDebugRenderer::Line& line = lines.ExpandAndGetRef();
+    line.m_start = corners[i];
+    line.m_end = corners[(i + 1) % 4];
+    line.m_startColor = color;
+    line.m_endColor = color;
+  }
+
+  plDebugRenderer::DrawLines(GetWorld(), lines, plColor::White);
 }
 
 PL_STATICLINK_FILE(AiPlugin, AiPlugin_Tactical_Implementation_SquadWorldModule);

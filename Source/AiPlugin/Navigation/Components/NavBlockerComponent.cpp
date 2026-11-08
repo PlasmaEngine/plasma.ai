@@ -3,15 +3,17 @@
 #include <AiPlugin/Navigation/Components/NavBlockerComponent.h>
 #include <Core/WorldSerializer/WorldReader.h>
 #include <Core/WorldSerializer/WorldWriter.h>
+#include <Foundation/Serialization/AbstractObjectGraph.h>
+#include <Foundation/Serialization/GraphPatch.h>
 
 // clang-format off
-PL_BEGIN_COMPONENT_TYPE(plAiNavBlockerComponent, 2, plComponentMode::Static)
+PL_BEGIN_COMPONENT_TYPE(plAiNavBlockerComponent, 3, plComponentMode::Static)
 {
   PL_BEGIN_PROPERTIES
   {
     PL_MEMBER_PROPERTY("BoxSize", m_vBoxSize)->AddAttributes(new plDefaultValueAttribute(plVec3(1.0f)), new plClampValueAttribute(plVec3(0.01f), plVariant())),
     PL_ACCESSOR_PROPERTY("Blocked", GetBlocked, SetBlocked)->AddAttributes(new plDefaultValueAttribute(true)),
-    PL_ENUM_MEMBER_PROPERTY("Mode", plAiNavObstacleMode, m_Mode),
+    PL_ENUM_MEMBER_PROPERTY("Mode", plAiNavBlockerMode, m_Mode),
   }
   PL_END_PROPERTIES;
 
@@ -31,6 +33,30 @@ PL_BEGIN_COMPONENT_TYPE(plAiNavBlockerComponent, 2, plComponentMode::Static)
 }
 PL_END_COMPONENT_TYPE
 // clang-format on
+
+/// Version 3 moved 'Mode' from plAiNavObstacleMode to plAiNavBlockerMode (same values, plus Carve).
+class plAiNavBlockerComponentPatch_2_3 : public plGraphPatch
+{
+public:
+  plAiNavBlockerComponentPatch_2_3()
+    : plGraphPatch("plAiNavBlockerComponent", 3)
+  {
+  }
+
+  void Patch(plGraphPatchContext&, plAbstractObjectGraph*, plAbstractObjectNode* pNode) const override
+  {
+    const plAbstractObjectNode::Property* pMode = pNode->FindProperty("Mode");
+
+    if (pMode == nullptr || !pMode->m_Value.IsA<plString>())
+      return;
+
+    plStringBuilder sMode = pMode->m_Value.Get<plString>();
+    sMode.ReplaceAll("plAiNavObstacleMode::", "plAiNavBlockerMode::");
+    pNode->ChangeProperty("Mode", plString(sMode));
+  }
+};
+
+static plAiNavBlockerComponentPatch_2_3 s_NavBlockerComponentPatch_2_3;
 
 plAiNavBlockerComponent::plAiNavBlockerComponent() = default;
 plAiNavBlockerComponent::~plAiNavBlockerComponent() = default;

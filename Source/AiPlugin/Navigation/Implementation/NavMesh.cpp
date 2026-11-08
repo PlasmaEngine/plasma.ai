@@ -183,6 +183,7 @@ plAiNavMeshSector& plAiNavMesh::BeginSectorBuild(SectorID sectorID)
   sector.m_FlagBuilding = 1;
   sector.m_FlagDirtyDuringBuild = 0;
   sector.m_BuildReason = sector.m_PendingReason;
+  sector.m_BuildStarted = plTime::Now();
   return sector;
 }
 
@@ -204,6 +205,17 @@ void plAiNavMesh::GetSectorStatus(plDynamicArray<plAiNavMeshSectorStatus>& out_s
     status.m_uiPolyCount = sector.m_uiPolyCount;
     status.m_uiBuildCount = sector.m_uiBuildCount;
     status.m_LastBuildDuration = sector.m_LastBuildDuration;
+    status.m_bBuildRunning = sector.m_FlagBuilding == 1;
+    status.m_fMinZ = sector.m_fTileMinZ;
+    status.m_fMaxZ = sector.m_fTileMaxZ;
+    status.m_bHasBounds = sector.m_bHasTileBounds;
+
+    if (sector.m_FlagBuilding == 1)
+    {
+      // a sector that never built has no duration to compare with; assume a typical one
+      const double fExpected = plMath::Max(sector.m_LastBuildDuration.GetSeconds(), 0.1);
+      status.m_fBuildProgress = plMath::Clamp(static_cast<float>((plTime::Now() - sector.m_BuildStarted).GetSeconds() / fExpected), 0.0f, 0.95f);
+    }
 
     if (sector.m_FlagUsable == 1)
     {
@@ -215,6 +227,50 @@ void plAiNavMesh::GetSectorStatus(plDynamicArray<plAiNavMeshSectorStatus>& out_s
       status.m_State = (sector.m_FlagBuilding == 1) ? plAiNavMeshSectorState::Building : plAiNavMeshSectorState::Queued;
     }
   }
+}
+
+plAiNavMeshStats plAiNavMesh::CalculateStats(plArrayPtr<const plAiNavMeshSectorStatus> sectors, plUInt32 uiPolyBudget)
+{
+  plAiNavMeshStats stats;
+  stats.m_uiPolyBudget = uiPolyBudget;
+  stats.m_uiSectors = sectors.GetCount();
+
+  double fBuildMs = 0.0;
+  plUInt32 uiBuilt = 0;
+
+  for (const plAiNavMeshSectorStatus& sector : sectors)
+  {
+    switch (sector.m_State)
+    {
+      case plAiNavMeshSectorState::Ready:
+        ++stats.m_uiReady;
+        break;
+      case plAiNavMeshSectorState::Failed:
+        ++stats.m_uiFailed;
+        break;
+      case plAiNavMeshSectorState::Queued:
+      case plAiNavMeshSectorState::Building:
+      case plAiNavMeshSectorState::Rebuilding:
+        break;
+    }
+
+    if (sector.m_bBuildRunning)
+      ++stats.m_uiBuilding;
+    else if (sector.m_State == plAiNavMeshSectorState::Queued || sector.m_State == plAiNavMeshSectorState::Rebuilding)
+      ++stats.m_uiQueued;
+
+    if (IsNearPolyBudget(sector.m_uiPolyCount, uiPolyBudget))
+      ++stats.m_uiNearPolyBudget;
+
+    if (sector.m_uiBuildCount > 0)
+    {
+      fBuildMs += sector.m_LastBuildDuration.GetMilliseconds();
+      ++uiBuilt;
+    }
+  }
+
+  stats.m_fAverageBuildMs = (uiBuilt > 0) ? static_cast<float>(fBuildMs / uiBuilt) : 0.0f;
+  return stats;
 }
 
 void plAiNavMesh::FinalizeSectorUpdates(plDynamicArray<SectorID>* out_pChangedSectors /*= nullptr*/)
@@ -260,6 +316,26 @@ void plAiNavMesh::FinalizeSectorUpdates(plDynamicArray<SectorID>* out_pChangedSe
       {
         plLog::Success("Loaded navmesh tile {}|{}", coord.x, coord.y);
         sector.m_FlagUsable = 1;
+
+        if (const dtMeshTile* pTile = m_pNavMesh->getTileByRef(sector.m_TileRef))
+        {
+          // the walkable surface, not the tile's voxel box, which reaches well below the floor; Detour's y is up
+          if (pTile->header->vertCount > 0)
+          {
+            float fMin = pTile->verts[1];
+            float fMax = fMin;
+
+            for (int v = 1; v < pTile->header->vertCount; ++v)
+            {
+              fMin = plMath::Min(fMin, pTile->verts[v * 3 + 1]);
+              fMax = plMath::Max(fMax, pTile->verts[v * 3 + 1]);
+            }
+
+            sector.m_fTileMinZ = fMin;
+            sector.m_fTileMaxZ = fMax;
+            sector.m_bHasTileBounds = true;
+          }
+        }
       }
       else
       {

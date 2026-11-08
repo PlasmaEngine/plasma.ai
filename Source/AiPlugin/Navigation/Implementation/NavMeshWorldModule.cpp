@@ -11,8 +11,10 @@
 
 plCVarInt cvar_NavMeshVisualize("AI.Navmesh.Visualize", -1, plCVarFlags::None, "Visualize the n-th navmesh.");
 plCVarInt cvar_NavMeshMaxConcurrentBuilds("AI.Navmesh.MaxConcurrentBuilds", 4, plCVarFlags::Default, "How many navmesh sectors may build in parallel. 1 = serial (old behavior).");
+plCVarInt cvar_NavMeshVisualizeMode("AI.Navmesh.VisualizeMode", 0, plCVarFlags::None, "What the navmesh view draws: 0 = polygons (needs AI.Navmesh.Visualize), 1 = sector status, 2 = rebuild reason, 3 = polygon density. 1 to 3 draw by themselves.");
+plCVarInt cvar_NavMeshSectorPolyBudget("AI.Navmesh.SectorPolyBudget", 2048, plCVarFlags::Default, "Polygons per navmesh sector that the density view treats as full. Sectors above 85 % of it are flagged in the views and in a log warning.");
 plCVarBool cvar_NavMeshShowBuildStats("AI.Navmesh.ShowBuildStats", false, plCVarFlags::Default, "Show navmesh generation statistics on screen.");
-plCVarBool cvar_NavMeshVisualizeBlockers("AI.Navmesh.VisualizeBlockers", false, plCVarFlags::Default, "Visualize nav blocker volumes (red = blocking, yellow = avoid, grey = inactive) and dynamic-obstacle boxes (orange = carve, yellow = avoid).");
+plCVarBool cvar_NavMeshVisualizeBlockers("AI.Navmesh.VisualizeBlockers", false, plCVarFlags::Default, "Visualize nav blocker volumes (red = blocking, yellow = avoid, orange = carve, grey = inactive) and dynamic-obstacle boxes (orange = carve, yellow = avoid).");
 plCVarBool cvar_NavMeshVisualizeLinks("AI.Navmesh.VisualizeLinks", false, plCVarFlags::Default, "Visualize nav links (off-mesh connections), colored by link type.");
 plCVarFloat cvar_NavMeshAvoidZoneCost("AI.Navmesh.AvoidZoneCost", 10.0f, plCVarFlags::Default, "Path cost multiplier for soft avoidance zones (obstacle/blocker mode 'Avoid'). 1 = no avoidance.");
 
@@ -25,10 +27,28 @@ PL_BEGIN_STATIC_REFLECTED_ENUM(plAiNavObstacleMode, 1)
   PL_ENUM_CONSTANTS(plAiNavObstacleMode::Block, plAiNavObstacleMode::Avoid)
 PL_END_STATIC_REFLECTED_ENUM;
 
+PL_BEGIN_STATIC_REFLECTED_ENUM(plAiNavBlockerMode, 1)
+  PL_ENUM_CONSTANTS(plAiNavBlockerMode::Block, plAiNavBlockerMode::Avoid, plAiNavBlockerMode::Carve)
+PL_END_STATIC_REFLECTED_ENUM;
+
 PL_IMPLEMENT_WORLD_MODULE(plAiNavMeshWorldModule);
 PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiNavMeshWorldModule, 1, plRTTINoAllocator)
 PL_END_DYNAMIC_REFLECTED_TYPE;
 // clang-format on
+
+namespace
+{
+  /// Nav blocker boxes reach this far below their bottom, so a box that ends just above the floor
+  /// (a door leaf with a gap under it) still covers the floor polygons.
+  constexpr float s_fBlockerFloorReach = 0.5f;
+
+  plBoundingBox ReachDownToFloor(const plBoundingBox& worldBox)
+  {
+    plBoundingBox box = worldBox;
+    box.m_vMin.z -= s_fBlockerFloorReach;
+    return box;
+  }
+} // namespace
 
 plAiNavMeshWorldModule::plAiNavMeshWorldModule(plWorld* pWorld)
   : plWorldModule(pWorld)
@@ -125,6 +145,118 @@ void plAiNavMeshWorldModule::Deinitialize()
   }
 
   m_BuildSlots.Clear();
+}
+
+plUInt32 plAiNavMeshWorldModule::GetSectorPolyBudget()
+{
+  return static_cast<plUInt32>(plMath::Max<plInt32>(cvar_NavMeshSectorPolyBudget, 1));
+}
+
+plAiNavMesh* plAiNavMeshWorldModule::GetVisualizedNavMesh()
+{
+  plInt32 i = plMath::Max<plInt32>(cvar_NavMeshVisualize, 0);
+
+  for (auto it = m_WorldNavMeshes.GetIterator(); it.IsValid(); ++it)
+  {
+    if (i-- == 0)
+      return it.Value();
+  }
+
+  return nullptr;
+}
+
+namespace
+{
+  struct LegendEntry
+  {
+    PL_DECLARE_POD_TYPE();
+
+    const char* m_szText;
+    plColorGammaUB m_Color;
+  };
+} // namespace
+
+void plAiNavMeshWorldModule::DrawSectorView(plAiNavMesh& ref_navMesh, plAiNavMeshVisualizeMode::Enum mode, plUInt32 uiMaxBuilds)
+{
+  const plUInt32 uiPolyBudget = GetSectorPolyBudget();
+
+  ref_navMesh.DebugDrawSectors(GetWorld(), mode, uiPolyBudget, m_vInspectedSector);
+
+  plDynamicArray<plAiNavMeshSectorStatus> sectors;
+  ref_navMesh.GetSectorStatus(sectors);
+  const plAiNavMeshStats stats = plAiNavMesh::CalculateStats(sectors, uiPolyBudget);
+
+  // the stats box, top right
+  {
+    plStringBuilder sStats;
+    sStats.SetFormat("Navmesh sectors\nSectors\t{}\nReady\t{}\nQueued\t{}\nBuilding\t{} / {}\nFailed\t{}\nAverage build\t{} ms\nNear poly limit\t{}", stats.m_uiSectors, stats.m_uiReady, stats.m_uiQueued, stats.m_uiBuilding, uiMaxBuilds, stats.m_uiFailed, plArgF(stats.m_fAverageBuildMs, 0), stats.m_uiNearPolyBudget);
+    plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::TopRight, "AiNavmeshSectors", sStats);
+
+    if (stats.m_uiFailed > 0)
+    {
+      plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::TopRight, "AiNavmeshSectors", "Failed sectors have no polygons: agents there find no path", plColorGammaUB(0xd7, 0x82, 0x78));
+    }
+  }
+
+  // the legend, bottom right
+  {
+    plHybridArray<LegendEntry, 8> legend;
+
+    switch (mode)
+    {
+      case plAiNavMeshVisualizeMode::SectorStatus:
+        legend.PushBack({"Sector status", plColorGammaUB(0xd9, 0xdc, 0xe1)});
+        legend.PushBack({"Ready", plColorGammaUB(0x9a, 0xa0, 0xa8)});
+        legend.PushBack({"Building", plColorGammaUB(0xcd, 0x8c, 0x96)});
+        legend.PushBack({"Failed (x)", plColorGammaUB(0xd7, 0x82, 0x78)});
+        legend.PushBack({"Queued (dashed)", plColorGammaUB(0xcd, 0x8c, 0x96)});
+        break;
+      case plAiNavMeshVisualizeMode::RebuildReason:
+        legend.PushBack({"Rebuild reason", plColorGammaUB(0xd9, 0xdc, 0xe1)});
+        legend.PushBack({"Obstacle", plColorGammaUB(0xcd, 0x8c, 0x96)});
+        legend.PushBack({"NavLink", plColorGammaUB(0x6e, 0xb9, 0xd2)});
+        legend.PushBack({"Requested", plColorGammaUB(0xdc, 0xc3, 0x6e)});
+        legend.PushBack({"Changed", plColorGammaUB(0x91, 0x96, 0xa0)});
+        legend.PushBack({"Initial", plColorGammaUB(0x6c, 0x72, 0x7b)});
+        break;
+      default:
+        legend.PushBack({"Polygons per sector", plColorGammaUB(0xd9, 0xdc, 0xe1)});
+        legend.PushBack({"Dark = few, yellow = the budget", plColorGammaUB(0x9a, 0xa0, 0xa8)});
+        legend.PushBack({"! = above 85 % of the budget", plColorGammaUB(0xdc, 0xc3, 0x6e)});
+        break;
+    }
+
+    for (const LegendEntry& entry : legend)
+    {
+      plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::BottomRight, "AiNavmeshLegend", entry.m_szText, entry.m_Color);
+    }
+  }
+
+  // the inspected sector, top left
+  if (m_vInspectedSector.x >= 0)
+  {
+    for (const plAiNavMeshSectorStatus& sector : sectors)
+    {
+      if (sector.m_vCoord != m_vInspectedSector)
+        continue;
+
+      plStringBuilder sInfo;
+      sInfo.SetFormat("Navmesh Sector ({}, {})\nState\t{}\nLast reason\t{}\nPolygons\t{} / {}\nBuilds\t{}\nLast build\t{} ms", sector.m_vCoord.x, sector.m_vCoord.y, plAiNavMeshSectorStateName(sector.m_State), plAiNavMeshRebuildReasonName(sector.m_LastReason), sector.m_uiPolyCount, uiPolyBudget, sector.m_uiBuildCount, plArgF(sector.m_LastBuildDuration.GetMilliseconds(), 0));
+      plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::TopLeft, "AiNavmeshSector", sInfo);
+
+      if (sector.m_State == plAiNavMeshSectorState::Failed)
+      {
+        plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::TopLeft, "AiNavmeshSector", "Last build failed. Agents in this sector report NoPathFound. Rebuild retries it.", plColorGammaUB(0xd7, 0x82, 0x78));
+      }
+
+      if (plAiNavMesh::IsNearPolyBudget(sector.m_uiPolyCount, uiPolyBudget))
+      {
+        plDebugRenderer::DrawInfoText(GetWorld(), plDebugTextPlacement::TopLeft, "AiNavmeshSector", "Close to the polygon limit. Mark clutter as not walkable or raise the cell size.", plColorGammaUB(0xdc, 0xc3, 0x6e));
+      }
+
+      break;
+    }
+  }
 }
 
 plAiNavMesh* plAiNavMeshWorldModule::GetNavMesh(plStringView sName)
@@ -235,6 +367,19 @@ void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
     plDynamicArray<plAiNavMesh::SectorID>& changedSectors = m_LastChangedSectors[nm.Value()];
     nm.Value()->FinalizeSectorUpdates(&changedSectors);
     ApplyNavBlockers(*nm.Value(), changedSectors);
+
+    const plUInt32 uiPolyBudget = GetSectorPolyBudget();
+
+    for (const plAiNavMesh::SectorID sectorID : changedSectors)
+    {
+      const plAiNavMeshSector* pSector = nm.Value()->GetSector(sectorID);
+
+      if (pSector != nullptr && pSector->m_FlagUsable == 1 && plAiNavMesh::IsNearPolyBudget(pSector->m_uiPolyCount, uiPolyBudget))
+      {
+        const plVec2I32 coord = nm.Value()->CalculateSectorCoord(sectorID);
+        plLog::Warning("AI navmesh '{}': sector {}|{} has {} polygons, close to the budget of {}. Mark clutter as not walkable or raise the cell size. The budget is AI.Navmesh.SectorPolyBudget.", nm.Key(), coord.x, coord.y, pSector->m_uiPolyCount, uiPolyBudget);
+      }
+    }
   }
 
   m_bAnyBlockerDirty = false;
@@ -265,7 +410,12 @@ void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
       if (!patch.m_bInUse)
         continue;
 
-      const plColor activeColor = (patch.m_Mode == plAiNavObstacleMode::Avoid) ? plColor::Yellow : plColor::Red;
+      plColor activeColor = plColor::Red;
+      if (patch.m_Mode == plAiNavBlockerMode::Avoid)
+        activeColor = plColor::Yellow;
+      else if (patch.m_Mode == plAiNavBlockerMode::Carve)
+        activeColor = plColor::Orange;
+
       plDebugRenderer::DrawLineBox(GetWorld(), patch.m_WorldBox, patch.m_bActive ? activeColor : plColor::Grey, plTransform::MakeIdentity());
     }
 
@@ -327,15 +477,19 @@ void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
     }
   }
 
-  if (cvar_NavMeshVisualize >= 0)
+  const auto viewMode = static_cast<plAiNavMeshVisualizeMode::Enum>(plMath::Clamp<plInt32>(cvar_NavMeshVisualizeMode, 0, plAiNavMeshVisualizeMode::Count - 1));
+
+  if (viewMode != plAiNavMeshVisualizeMode::Polygons || cvar_NavMeshVisualize >= 0)
   {
-    plInt32 i = cvar_NavMeshVisualize;
-    for (auto it = m_WorldNavMeshes.GetIterator(); it.IsValid(); ++it)
+    if (plAiNavMesh* pViewed = GetVisualizedNavMesh())
     {
-      if (i-- == 0)
+      if (viewMode == plAiNavMeshVisualizeMode::Polygons)
       {
-        it.Value()->DebugDraw(GetWorld(), m_Config);
-        break;
+        pViewed->DebugDraw(GetWorld(), m_Config);
+      }
+      else
+      {
+        DrawSectorView(*pViewed, viewMode, static_cast<plUInt32>(plMath::Clamp<plInt32>(cvar_NavMeshMaxConcurrentBuilds, 1, 16)));
       }
     }
   }
@@ -442,6 +596,12 @@ void plAiNavMeshWorldModule::Update(const UpdateContext& ctxt)
 
 plAiNavMeshWorldModule::BlockerID plAiNavMeshWorldModule::RegisterNavBlocker(const plBoundingBox& worldBox, bool bActive, plEnum<plAiNavObstacleMode> mode)
 {
+  const plAiNavBlockerMode::Enum blockerMode = (mode == plAiNavObstacleMode::Avoid) ? plAiNavBlockerMode::Avoid : plAiNavBlockerMode::Block;
+  return RegisterNavBlocker(worldBox, bActive, plEnum<plAiNavBlockerMode>(blockerMode));
+}
+
+plAiNavMeshWorldModule::BlockerID plAiNavMeshWorldModule::RegisterNavBlocker(const plBoundingBox& worldBox, bool bActive, plEnum<plAiNavBlockerMode> mode)
+{
   BlockerID id = InvalidBlockerID;
 
   if (!m_FreeFlagPatches.IsEmpty())
@@ -456,8 +616,8 @@ plAiNavMeshWorldModule::BlockerID plAiNavMeshWorldModule::RegisterNavBlocker(con
   }
 
   FlagPatch& patch = m_FlagPatches[id];
-  patch.m_WorldBox = worldBox;
-  patch.m_ClearBox = worldBox;
+  patch.m_WorldBox = ReachDownToFloor(worldBox);
+  patch.m_ClearBox = patch.m_WorldBox;
   patch.m_Mode = mode;
   patch.m_bInUse = true;
   patch.m_bActive = bActive;
@@ -466,9 +626,13 @@ plAiNavMeshWorldModule::BlockerID plAiNavMeshWorldModule::RegisterNavBlocker(con
 
   m_bAnyBlockerDirty = true;
 
-  // rebuild the overlapping sectors so the build splits dedicated polygons out of this volume -
-  // the flag stamp only patches polys centered inside the box, which requires that split
-  InvalidateSectorsForBox(worldBox);
+  // Block / Avoid: rebuild the overlapping sectors so the build splits dedicated polygons out of
+  // this volume - the flag stamp only patches polys centered inside the box, which requires that split.
+  // Carve: rebuild so the hole is cut (an inactive carve changes nothing).
+  if (mode != plAiNavBlockerMode::Carve || bActive)
+  {
+    InvalidateSectorsForBox(patch.m_WorldBox);
+  }
 
   return id;
 }
@@ -485,6 +649,12 @@ void plAiNavMeshWorldModule::SetNavBlockerActive(BlockerID id, bool bActive)
     patch.m_bActive = bActive;
     patch.m_bDirty = true;
     m_bAnyBlockerDirty = true;
+
+    // a carved hole only opens or closes with a rebuild
+    if (patch.m_Mode == plAiNavBlockerMode::Carve)
+    {
+      InvalidateSectorsForBox(patch.m_WorldBox);
+    }
   }
 }
 
@@ -496,8 +666,8 @@ void plAiNavMeshWorldModule::UpdateNavBlockerBounds(BlockerID id, const plBoundi
   FlagPatch& patch = m_FlagPatches[id];
 
   // the clear pass must cover both the old and the new position, so the old area gets released
-  patch.m_ClearBox.ExpandToInclude(worldBox);
-  patch.m_WorldBox = worldBox;
+  patch.m_WorldBox = ReachDownToFloor(worldBox);
+  patch.m_ClearBox.ExpandToInclude(patch.m_WorldBox);
   patch.m_bDirty = true;
   m_bAnyBlockerDirty = true;
 
@@ -528,13 +698,14 @@ void plAiNavMeshWorldModule::ApplyNavBlockers(plAiNavMesh& ref_navMesh, plArrayP
   // collect which patches need (re)application on this navmesh:
   // - patches marked dirty (toggled, moved, added, removed)
   // - active patches intersecting a sector whose tile was just swapped (fresh tiles lose the flags)
+  // Carve blockers are part of the build input and never stamp anything.
   plHybridArray<plUInt32, 32> patchesToApply;
 
   for (plUInt32 uiPatch = 0; uiPatch < m_FlagPatches.GetCount(); ++uiPatch)
   {
     const FlagPatch& patch = m_FlagPatches[uiPatch];
 
-    if (!patch.m_bInUse)
+    if (!patch.m_bInUse || patch.m_Mode == plAiNavBlockerMode::Carve)
       continue;
 
     bool bApply = patch.m_bDirty;
@@ -574,7 +745,7 @@ void plAiNavMeshWorldModule::ApplyNavBlockers(plAiNavMesh& ref_navMesh, plArrayP
     {
       const FlagPatch& patch = m_FlagPatches[uiPatch];
 
-      if (!patch.m_bInUse || !patch.m_bActive || patchesToApply.Contains(uiPatch))
+      if (!patch.m_bInUse || !patch.m_bActive || patch.m_Mode == plAiNavBlockerMode::Carve || patchesToApply.Contains(uiPatch))
         continue;
 
       for (plUInt32 uiOther : patchesToApply)
@@ -594,7 +765,7 @@ void plAiNavMeshWorldModule::ApplyNavBlockers(plAiNavMesh& ref_navMesh, plArrayP
   for (plUInt32 uiPatch : patchesToApply)
   {
     const FlagPatch& patch = m_FlagPatches[uiPatch];
-    const plUInt8 uiResetArea = (patch.m_Mode == plAiNavObstacleMode::Avoid) ? plAiNavMesh::RestoreBakedArea : 0xFF;
+    const plUInt8 uiResetArea = (patch.m_Mode == plAiNavBlockerMode::Avoid) ? plAiNavMesh::RestoreBakedArea : 0xFF;
 
     ref_navMesh.ApplyFlagPatch(patch.m_ClearBox, 0, plAiNavMeshPolyFlags::Blocked, uiResetArea);
   }
@@ -607,7 +778,7 @@ void plAiNavMeshWorldModule::ApplyNavBlockers(plAiNavMesh& ref_navMesh, plArrayP
     if (!patch.m_bActive)
       continue;
 
-    if (patch.m_Mode == plAiNavObstacleMode::Avoid)
+    if (patch.m_Mode == plAiNavBlockerMode::Avoid)
     {
       // soft avoidance: swap the polys into the high-cost area, leave them walkable
       ref_navMesh.ApplyFlagPatch(patch.m_WorldBox, 0, 0, plAiNavMeshAvoidZoneAreaID);
@@ -831,10 +1002,10 @@ void plAiNavMeshWorldModule::CollectBlockerZonesForSector(const plAiNavMesh& nav
   sectorBounds.Grow(plVec3(2.0f, 2.0f, 0.0f));
 
   // include INACTIVE blockers: the split must already exist when they get toggled on,
-  // otherwise the first toggle wouldn't be instant
+  // otherwise the first toggle wouldn't be instant. Carve blockers need no split.
   for (const FlagPatch& patch : m_FlagPatches)
   {
-    if (patch.m_bInUse && !patch.m_bPendingRemoval && sectorBounds.Overlaps(patch.m_WorldBox))
+    if (patch.m_bInUse && !patch.m_bPendingRemoval && patch.m_Mode != plAiNavBlockerMode::Carve && sectorBounds.Overlaps(patch.m_WorldBox))
     {
       out_boxes.PushBack(patch.m_WorldBox);
     }
@@ -843,13 +1014,21 @@ void plAiNavMeshWorldModule::CollectBlockerZonesForSector(const plAiNavMesh& nav
 
 void plAiNavMeshWorldModule::CollectObstacleCarvesForSector(const plAiNavMesh& navMesh, plAiNavMesh::SectorID sectorID, plDynamicArray<plBoundingBox>& out_carveBoxes, plDynamicArray<plBoundingBox>& out_avoidZones) const
 {
-  if (m_ObstacleCarves.IsEmpty())
+  if (m_ObstacleCarves.IsEmpty() && m_FlagPatches.IsEmpty())
     return;
 
   // include the tile's rasterization border: a carve just outside the sector still erodes into it,
   // the same way static geometry in the border does (2m safely covers agent radius + 3 cells)
   plBoundingBox sectorBounds = navMesh.GetSectorBounds(navMesh.CalculateSectorCoord(sectorID), -10000.0f, 10000.0f);
   sectorBounds.Grow(plVec3(2.0f, 2.0f, 0.0f));
+
+  for (const FlagPatch& patch : m_FlagPatches)
+  {
+    if (patch.m_bInUse && patch.m_bActive && patch.m_Mode == plAiNavBlockerMode::Carve && sectorBounds.Overlaps(patch.m_WorldBox))
+    {
+      out_carveBoxes.PushBack(patch.m_WorldBox);
+    }
+  }
 
   for (const ObstacleCarve& carve : m_ObstacleCarves)
   {

@@ -84,6 +84,7 @@ void plAiEqsWorldModule::ExecuteQueryJob(plUInt32 uiSlotIndex, plUInt32 uiScratc
   ctx.m_pFilter = slot.m_pFilter;
   ctx.m_pPhysics = m_pPhysicsForQueries;
   ctx.m_pTactical = m_pTacticalForQueries;
+  ctx.m_pThreat = slot.m_pThreat.Borrow();
   ctx.m_uiCollisionLayer = slot.m_pNavMesh->GetConfig().m_uiCollisionLayer;
   ctx.m_uiRngSeed = uiSlotIndex * 977 + slot.m_Result.m_uiFrameStamp;
   ctx.m_uiMaxCandidates = plMath::Min<plUInt32>(plMath::Max<plUInt8>(pDesc->m_uiCandidates, 1), 64);

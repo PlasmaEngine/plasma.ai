@@ -32,6 +32,8 @@ const char* plAiDecisionOutcomeName(plAiDecisionOutcome outcome)
       return "Failed";
     case plAiDecisionOutcome::Disabled:
       return "Disabled";
+    case plAiDecisionOutcome::Interrupted:
+      return "Interrupted";
   }
 
   return "?";

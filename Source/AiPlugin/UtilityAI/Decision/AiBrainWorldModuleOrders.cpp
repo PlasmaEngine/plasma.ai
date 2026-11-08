@@ -27,6 +27,26 @@ void plAiBrainWorldModule::RequestDecision(plUInt32 uiSlot, plBitflags<plAiWakeR
   agent.m_NextDecision = plMath::Min(agent.m_NextDecision, earliest);
 }
 
+void plAiBrainWorldModule::InterruptBehavior(plUInt32 uiSlot)
+{
+  if (uiSlot >= m_Agents.GetCount() || !m_Agents[uiSlot].m_bInUse)
+    return;
+
+  Agent& agent = m_Agents[uiSlot];
+
+  plAiAgentComponent* pComponent = nullptr;
+  if (agent.m_iActiveBehavior < 0 || !GetWorld()->TryGetComponent(agent.m_hComponent, pComponent))
+    return;
+
+  RecordHistory(agent, GetBehaviorName(agent.m_Behaviors[agent.m_iActiveBehavior].m_hResource), plHashedString(), agent.m_fActiveScore, 0.0f, plAiDecisionOutcome::Interrupted);
+  DeactivateBehavior(agent, *pComponent, true);
+
+  if (agent.m_bInUse)
+  {
+    RequestDecision(uiSlot, plAiWakeReason::BehaviorEnded);
+  }
+}
+
 void plAiBrainWorldModule::WakeAgentsForExpiredOrders(plTime now)
 {
   for (plUInt32 uiSlot : m_ActiveAgents)

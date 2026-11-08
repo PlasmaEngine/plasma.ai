@@ -163,6 +163,22 @@ public:
   plEnum<plAiEqsContextCombine> m_Combine;
 };
 
+/// \brief The querier team's threat map at each item: how safe the position is from known enemies and danger areas.
+///
+/// Safety (the default) scores 1 where no known enemy sees the position and no danger area reaches it; Threat, Visibility
+/// and Danger read one layer each. A querier whose team has no map, or an item off the grid, uses the missing-data policy.
+class PL_AIPLUGIN_DLL plAiEqsTest_ThreatMap : public plAiEqsTest
+{
+  PL_ADD_DYNAMIC_REFLECTION(plAiEqsTest_ThreatMap, plAiEqsTest);
+
+public:
+  plAiEqsTest_ThreatMap();
+
+  virtual plUInt32 Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAiEqsItem> items, plUInt32 uiFirstItem) const override;
+
+  plEnum<plAiEqsThreatLayer> m_Layer;
+};
+
 /// \brief Navmesh raycast from the querier toward each item: cheap straight-line reachability.
 /// A clear walk scores 1, a detour 0.25 (matches the tactical ReachableApprox scorer).
 class PL_AIPLUGIN_DLL plAiEqsTest_ReachableApprox : public plAiEqsTest

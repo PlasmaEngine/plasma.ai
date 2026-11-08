@@ -6,6 +6,7 @@
 
 class plDocument;
 class plGameObjectDocument;
+class plUiDrawListWriter;
 struct plSelectionManagerEvent;
 
 /// \brief The AI Debugger panel of a scene (M1): the agents, the watched agent's decision, perception, blackboard,
@@ -37,6 +38,7 @@ private:
     Perception,
     Blackboard,
     Navigation,
+    Squad,
     Eqs,
   };
 
@@ -58,8 +60,20 @@ private:
   void BuildTabs(plUiElement* pRoot, const plRectFloat& rect);
   void BuildDecision(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched);
   void BuildPerception(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched);
+  void BuildThreat(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched);
   void BuildBlackboard(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched);
-  void BuildNavigation(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched);
+  void BuildNavigation(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched* pWatched);
+  void BuildNavmeshSectors(plUiElement* pBody, float fWidth);
+
+  /// The Squad tab: orders for a squad, its members on a map, and what the squad decided and why.
+  void BuildSquad(plUiElement* pPane, const plRectFloat& rect);
+  void BuildSquadInfo(plUiElement* pBody, float fWidth, const plAiDebugFrame::Squad& squad);
+  void PublishSquadMap(const plAiDebugFrame::Squad* pSquad);
+  void PublishSquadWorld(plUiDrawListWriter& w, const plRectFloat& local);
+  void PublishSquadOthers(plUiDrawListWriter& w, const plRectFloat& local, const plAiDebugFrame::Squad* pSquad);
+  const plAiDebugFrame::Squad* FindSquad() const;
+  plVec2 SquadMapToWorld(const plVec2& vSurface) const;
+  void IssueSquadDraft();
   void BuildEqs(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched);
   void BuildEmpty(plUiElement* pBody, float fWidth, plStringView sTitle, plStringView sLine);
   void BuildTimeline(plUiElement* pRoot, const plRectFloat& rect);
@@ -93,6 +107,22 @@ private:
   plUniquePtr<plAiDebugSession> m_pSession;
 
   Tab m_Tab = Tab::Decision;
+
+  // the Squad tab: the order being drafted, and the map it is drawn on
+  plString m_sSquad;                       ///< the squad the tab shows; empty = the first
+  plUInt8 m_uiSquadIntent = 3;             ///< plAiSquadIntent of the draft: Hold
+  float m_fSquadSeconds = 20.0f;           ///< the draft's duration
+  bool m_bSquadNoRetreat = false;
+  bool m_bSquadDraft = false;              ///< a region was drawn
+  plVec2 m_vSquadDraftMin = plVec2::MakeZero();
+  plVec2 m_vSquadDraftMax = plVec2::MakeZero();
+  bool m_bSquadWorld = false;              ///< the map fits the whole world, not just the squad
+  bool m_bSquadDragging = false;
+  plVec2 m_vSquadDragStart = plVec2::MakeZero();
+  plRectFloat m_SquadMapRect = plRectFloat(0, 0, 0, 0); ///< on the surface, for hit-testing
+  plVec2 m_vSquadMapMin = plVec2::MakeZero();           ///< the world position of the map's lower left corner
+  float m_fSquadMapScale = 1.0f;                        ///< pixels per meter
+  plString m_sSquadMapEntry;                            ///< the draw list entry the map publishes to
   plString m_sFilter;
   bool m_bAlertedOnly = false;
   bool m_bFollowSelection = true;

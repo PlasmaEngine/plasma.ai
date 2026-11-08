@@ -111,6 +111,29 @@ survivors are the squad's new full strength, so only new losses make it retreat 
 that joins (reinforcements, or a deactivated member that comes back) also starts a new count. A
 retreat's rally point is chosen once, when the retreat begins.
 
+### Squad orders
+
+Game code, a script, the encounter director or the AI Debugger can order a squad
+(`plAiSquadWorldModule::IssueOrder`, or `IssueSquadOrder` on an agent of the squad). An order has an
+intent (Hold, Advance, Engage or Retreat), an optional region (a rectangle on the ground), a duration
+and a **No retreat** flag:
+- While an order is active, the squad's intent is the order's. Its own reasoning (shared target,
+  losses, exposure) does not change it, and the members still read it as `Ai_SquadIntent`, so their
+  behaviors need no change. Members also get `Ai_SquadOrderActive` and `Ai_SquadRegionCenter`.
+- With a region, each member's `Ai_SquadMovePos` is a spot of its own inside it. Hold and Engage go
+  to the spot, Advance reaches it in bounds, Retreat falls back to it.
+- An order lasts its duration (0 = until cancelled), then the squad goes back to its own intent at
+  once. A new order replaces the old one; `CancelOrder` ends it.
+- Losses that would make the squad retreat break the order (the squad retreats by itself), unless
+  the order has **No retreat**: then the squad stays at its task, and retreats when the order ends if
+  it still has the losses.
+- An order for a squad that has no member yet is kept, and taken when the squad forms. Its time
+  counts from the moment it was given.
+- An encounter wave can carry an order for the squad it spawns: **Order**, **Order Duration**,
+  **Order Radius** (a square around the wave's object; 0 = no region) and **Order No Retreat**.
+
+The squad's history (orders, intent changes, losses) is in the AI Debugger's Squad tab.
+
 ## Encounter director
 
 `plAiEncounterDirectorComponent` paces an encounter: it decides when each wave may start. It doesn't
@@ -255,9 +278,64 @@ logs an error and leaves the sector without polygons until it is rebuilt.
 
 `plAiNavMesh::GetSectorStatus` reports, per requested sector:
 - its state: queued, building, ready, rebuilding or failed;
-- its polygon count, against a limit of `plAiNavMesh::MaxPolysPerSector`;
+- its polygon count;
 - how many times it was built and how long the last build took;
-- why it was last built: first build, obstacle, nav link, requested or another change.
+- why it was last built: first build, obstacle, nav link, requested or another change;
+- how far a running build probably is (an estimate from the last build's duration, never complete before it
+  finishes), and the height range of its tile.
+
+The polygon budget `AI.Navmesh.SectorPolyBudget` (default 2048) is the count the density view treats as full.
+A sector that is built with 85 % of it or more logs a warning. The hard limit of the data structure is
+`plAiNavMesh::MaxPolysPerSector`, which sectors never come close to.
+
+### Sector views
+
+`AI.Navmesh.VisualizeMode` draws the sectors instead of the polygons: 1 = sector status, 2 = rebuild
+reason, 3 = polygon density (0 = polygons, with `AI.Navmesh.Visualize`). The modes draw by themselves.
+- **Sector status**: ready sectors are grey, building and rebuilding ones rose with a progress bar,
+  failed ones red with a cross, queued ones a dashed rose border.
+- **Rebuild reason**: rose = obstacle, blue = nav link, yellow = requested, grey = changed, dark = first build.
+- **Polygon density**: dark to yellow against the budget; a sector near the budget shows `! count`.
+
+A stats box (sectors, ready, queued, building against `AI.Navmesh.MaxConcurrentBuilds`, failed,
+average build time, sectors near the budget) and a legend show with the views. The AI Debugger outlines
+the sector under the watched agent, or the one picked in its Navigation tab.
+
+### Long paths
+
+A path corridor holds 256 polygons and a path search 2048 nodes. A path that is longer is cut at the
+corridor's end. The navigation keeps its state at FullPathFound, `plAiNavigation::IsPathContinued()` is
+true, and once the agent has used up half of the corridor a second search from the corridor's end to the
+target adds the next stretch. A target that proves unreachable ends as PartialPathFound, as before.
+Giving the same destination again while a long path is followed does not restart it.
+
+## Threat map
+
+Each team has a map of what it knows about danger: a grid of 2 m cells over the navmesh sectors
+(`plAiThreatWorldModule`). A cell holds the **threat** (line of sight to an enemy position the team's agents
+remember, falling off with distance up to `AI.Threat.Range`, and with how sure the agents are), and whether
+a known enemy sees it. **Danger areas** add danger anywhere: inside the radius it is 0.25 at the edge and 1
+at the center, and a timed area fades. Stimuli reach the map through the agents' remembered targets.
+
+- The map refreshes at the squad tick rate (`AI.Threat.TickInterval`), within a raycast budget per
+  frame (`AI.Threat.RaycastsPerFrame`). The rays run on the main thread, after physics has stepped.
+- Queries read published snapshots that never change, so tactical queries and EQS tests on worker
+  threads see a consistent map. A team that no agent belongs to has no map.
+- Add danger with `plAiThreatWorldModule::AddDangerArea`, a `plAiDangerAreaComponent` (follows its
+  object, optionally timed) or the component's `AddDangerArea` script function. An area can be for one
+  team; without a team it is for every team.
+- Tactical queries: the cover presets score `Threat` (1 where known enemies cannot hurt) and `Danger`:
+  a candidate inside an area's core (danger 0.5 or more) is discarded, and every score is multiplied by
+  1 minus the danger. The query description's `m_sTeam` says whose map; the pick state sets it from the agent.
+- EQS: the **Threat Map** test reads Safety (default), Threat, Visibility or Danger at an item.
+- Agents with a plBlackboardComponent get `Ai_ThreatHere` and `Ai_DangerHere` every tick.
+- An agent whose claimed cover reaches danger 0.3 (`AI.Threat.EvadeDanger`) loses the claim and its
+  behavior ends (outcome Interrupted, even while locked); the behavior that wins again picks its cover
+  anew. This runs on the next map tick, at most once a second per agent. `InterruptBehavior` does the same
+  from a script.
+
+`AI.Threat.Visualize` draws the map: 1 = combined (threat rose, danger red), 2 = threat, 3 = visibility,
+4 = danger. It shows the team of the watched agent, or `AI.Threat.VisualizeTeam`.
 
 ## Crowd avoidance
 
@@ -271,9 +349,23 @@ character follows the crowd's adjusted velocity.
 
 ## Nav blockers
 
+A nav blocker only acts while the world simulates (Play or Simulate). It acts on floor surfaces
+inside its box or up to 0.5 m below the box's bottom, so a box resting on or just above the floor
+works. The **Mode** decides what it does:
+- **Block**: the polygons in the box are closed to every path search. Toggling is instant.
+- **Avoid**: the polygons stay walkable but cost `AI.Navmesh.AvoidZoneCost` times more to cross. Toggling is instant.
+- **Carve**: the box is cut out of the navmesh like solid geometry, and agents keep their radius
+  away from it. No collision shape is needed. Toggling or moving it rebuilds the sectors it
+  overlaps, which takes about 100 ms.
+
+The navmesh view (`AI.Navmesh.Visualize`) draws polygons closed by a Block blocker in red and Avoid
+polygons in orange; a carve shows as a hole. `AI.Navmesh.VisualizeBlockers` draws the blocker boxes
+themselves: red = Block, yellow = Avoid, orange = Carve, grey = switched off.
+
 Removing a nav blocker gives each polygon under it back the area it was built with, so ground
 types (surface costs) survive. Blocker volumes baked into the navmesh keep the ground type of the
-surface below. A blocker closes the nav links that start or end inside it while it exists.
+surface below. A Block or Avoid blocker closes the nav links that start or end inside it while it
+exists.
 
 ## Voxel navigation
 

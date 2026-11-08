@@ -3,6 +3,7 @@
 #include <AiPlugin/Eqs/EqsQueryResource.h>
 #include <AiPlugin/Eqs/EqsTest.h>
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/Tactical/ThreatMap.h>
 #include <AiPlugin/Utils/RcMath.h>
 #include <Core/Interfaces/PhysicsWorldModule.h>
 #include <DetourNavMeshQuery.h>
@@ -16,6 +17,10 @@ PL_END_STATIC_REFLECTED_ENUM;
 
 PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsContextCombine, 1)
   PL_ENUM_CONSTANTS(plAiEqsContextCombine::Min, plAiEqsContextCombine::Max, plAiEqsContextCombine::Average)
+PL_END_STATIC_REFLECTED_ENUM;
+
+PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsThreatLayer, 1)
+  PL_ENUM_CONSTANTS(plAiEqsThreatLayer::Safety, plAiEqsThreatLayer::Threat, plAiEqsThreatLayer::Visibility, plAiEqsThreatLayer::Danger)
 PL_END_STATIC_REFLECTED_ENUM;
 
 PL_BEGIN_STATIC_REFLECTED_ENUM(plAiEqsFilterCondition, 1)
@@ -101,6 +106,16 @@ PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTest_LineOfSight, 1, plRTTIDefaultAllocat
     PL_MEMBER_PROPERTY("CoverEyeHeight", m_fCoverEyeHeight)->AddAttributes(new plDefaultValueAttribute(0.6f), new plClampValueAttribute(0.0f, 5.0f)),
     PL_MEMBER_PROPERTY("ContextEyeHeight", m_fContextEyeHeight)->AddAttributes(new plDefaultValueAttribute(1.55f), new plClampValueAttribute(0.0f, 5.0f)),
     PL_ENUM_MEMBER_PROPERTY("Combine", plAiEqsContextCombine, m_Combine),
+  }
+  PL_END_PROPERTIES;
+}
+PL_END_DYNAMIC_REFLECTED_TYPE;
+
+PL_BEGIN_DYNAMIC_REFLECTED_TYPE(plAiEqsTest_ThreatMap, 1, plRTTIDefaultAllocator<plAiEqsTest_ThreatMap>)
+{
+  PL_BEGIN_PROPERTIES
+  {
+    PL_ENUM_MEMBER_PROPERTY("Layer", plAiEqsThreatLayer, m_Layer),
   }
   PL_END_PROPERTIES;
 }
@@ -460,6 +475,58 @@ plUInt32 plAiEqsTest_Unclaimed::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAi
     {
       item.m_fRaw = 0.0f;
     }
+  }
+
+  return items.GetCount() - uiFirstItem;
+}
+
+//////////////////////////////////////////////////////////////////////////
+// ThreatMap
+
+plAiEqsTest_ThreatMap::plAiEqsTest_ThreatMap()
+{
+  m_Purpose = plAiEqsTestPurpose::ScoreOnly;
+  m_Layer = plAiEqsThreatLayer::Safety;
+}
+
+plUInt32 plAiEqsTest_ThreatMap::Run(plAiEqsEvalContext& ref_ctx, plArrayPtr<plAiEqsItem> items, plUInt32 uiFirstItem) const
+{
+  for (plUInt32 i = uiFirstItem; i < items.GetCount(); ++i)
+  {
+    plAiEqsItem& item = items[i];
+    item.m_fRaw = 1.0f;
+
+    if (ref_ctx.m_pThreat == nullptr)
+    {
+      item.m_TestData = plAiEqsTestData::MissingContext;
+      continue;
+    }
+
+    const float fThreat = ref_ctx.m_pThreat->GetThreat(item.m_vPosition);
+    const float fDanger = ref_ctx.m_pThreat->GetDanger(item.m_vPosition);
+    const float fVisible = ref_ctx.m_pThreat->GetVisibility(item.m_vPosition);
+
+    float fValue = 0.0f;
+
+    switch (m_Layer.GetValue())
+    {
+      case plAiEqsThreatLayer::Safety:
+        fValue = (1.0f - fThreat) * (1.0f - fDanger);
+        break;
+      case plAiEqsThreatLayer::Threat:
+        fValue = fThreat;
+        break;
+      case plAiEqsThreatLayer::Visibility:
+        fValue = fVisible;
+        break;
+      case plAiEqsThreatLayer::Danger:
+        fValue = fDanger;
+        break;
+    }
+
+    item.m_bHasMeasurement = true;
+    item.m_fMeasurement = fValue;
+    item.m_fRaw = fValue;
   }
 
   return items.GetCount() - uiFirstItem;

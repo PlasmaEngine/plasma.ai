@@ -4,6 +4,8 @@
 #include <AiPlugin/Navigation/NavigationConfig.h>
 #include <AiPlugin/Tactical/SquadTypes.h>
 #include <Core/World/WorldModule.h>
+#include <Foundation/Containers/Deque.h>
+#include <Foundation/Containers/HashTable.h>
 
 class plAiPerceptionWorldModule;
 
@@ -43,6 +45,61 @@ public:
 
   /// \brief Re-reads the squad settings from the AI plugin config file.
   void ReloadSquadConfig();
+
+  /// \name Squad orders
+  ///@{
+
+  /// \brief Orders a squad, replacing the order it has. A squad that doesn't exist yet takes the order as soon as its
+  /// first member registers, with the time counting from now. Intents other than Engage, Advance, Hold and Retreat are
+  /// ignored.
+  void IssueOrder(const plHashedString& sSquadId, const plAiSquadOrder& order);
+
+  /// \brief Ends the squad's order; it goes back to its automatic intent.
+  void CancelOrder(const plTempHashedString& sSquadId);
+
+  /// \brief The order of a squad and the time left on it (zero without a duration). False when it has none.
+  bool GetOrder(const plTempHashedString& sSquadId, plAiSquadOrder& out_order, plTime& out_remaining) const;
+
+  ///@}
+
+  /// \name Debugging tools
+  ///@{
+
+  struct MemberInfo
+  {
+    plGameObjectHandle m_hOwner;
+    plVec3 m_vPosition = plVec3::MakeZero();
+    bool m_bAttackToken = false;
+    bool m_bMoveToken = false;
+  };
+
+  struct HistoryInfo
+  {
+    double m_fTime = 0.0; ///< world seconds
+    plString m_sText;
+  };
+
+  struct SquadInfo
+  {
+    plHashedString m_sId;
+    plUInt32 m_uiPeakSize = 0;
+    plUInt32 m_uiLosses = 0;
+    plUInt32 m_uiRetreatLosses = 0; ///< the losses that break an order or make the squad retreat
+    plEnum<plAiSquadIntent> m_Intent;
+    bool m_bHasOrder = false;
+    plAiSquadOrder m_Order;
+    double m_fOrderRemaining = 0.0; ///< seconds; zero without a duration
+    plVec3 m_vHome = plVec3::MakeZero();
+    bool m_bHasTarget = false;
+    plVec3 m_vTargetPosition = plVec3::MakeZero();
+    plDynamicArray<MemberInfo> m_Members;
+    plDynamicArray<HistoryInfo> m_History; ///< newest first
+  };
+
+  /// \brief One entry per squad that has members.
+  void GetSquadInfos(plDynamicArray<SquadInfo>& out_squads) const;
+
+  ///@}
 
 private:
   void UpdateSquads(const UpdateContext& ctxt); // PostAsync, priority -1100 (after brain apply + tactical probes)
@@ -96,7 +153,33 @@ private:
     plTime m_RallyChosenFor = plTime::MakeFromSeconds(-1.0); ///< m_IntentSince of the retreat the rally point belongs to
 
     plTime m_NextTick;
+
+    // ---- orders ----
+    bool m_bHasOrder = false;
+    plAiSquadOrder m_Order;
+    plTime m_OrderStart;
+    bool m_bOrderLossNoted = false; ///< the history already says that losses reached the limit under a no-retreat order
+
+    struct HistoryEntry
+    {
+      plTime m_Time;
+      plString m_sText;
+    };
+
+    plDeque<HistoryEntry> m_History; ///< oldest first
   };
+
+  struct PendingOrder
+  {
+    plAiSquadOrder m_Order;
+    plTime m_Start;
+  };
+
+  void StartOrder(Squad& squad, const plAiSquadOrder& order, plTime start);
+  void EndOrder(Squad& squad, plTime now, plStringView sHow, bool bKeepIntentClock);
+  void AddHistory(Squad& squad, plTime now, plStringView sText);
+  void SetIntent(Squad& squad, plAiSquadIntent::Enum intent, plTime now, plStringView sHow);
+  void DrawOrder(const Squad& squad);
 
   void TickSquad(Squad& squad, plTime now);
   void SweepMembers(Squad& squad);
@@ -107,6 +190,8 @@ private:
   void AssignMoveTokensAndPositions(Squad& squad, plTime now);
   void PublishMemberEntries(Squad& squad);
   void DrawSquadDebug(const Squad& squad);
+
+  plHashTable<plHashedString, PendingOrder> m_PendingOrders; ///< orders for squads that have no member yet
 
   plDeque<Member> m_Members;
   plDynamicArray<MemberID> m_FreeMembers;

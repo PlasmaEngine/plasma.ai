@@ -321,6 +321,7 @@ int main(int argc, char** argv)
   RunNavigationTests();
   RunVoxelTests();
   RunEncounterTests();
+  RunThreatTests();
 
   for (int i = 1; i < argc; ++i)
     CheckMigratedEqsResource(argv[i]);

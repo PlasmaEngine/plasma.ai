@@ -1,5 +1,6 @@
 #pragma once
 
+#include <AiPlugin/Navigation/NavMeshStatus.h>
 #include <AiPlugin/Navigation/NavigationConfig.h>
 #include <DetourNavMesh.h>
 #include <DetourNavMeshQuery.h>
@@ -42,27 +43,6 @@ struct plAiNavMeshInputGeo final
   plDynamicArray<plUInt8> m_TriangleAreaIDs;
 };
 
-/// \brief Why a navmesh sector was (re)built.
-enum class plAiNavMeshRebuildReason : plUInt8
-{
-  None,       ///< never built
-  FirstBuild, ///< requested for the first time
-  Obstacle,   ///< an obstacle, carve or blocker changed
-  NavLink,    ///< a nav link was added, moved or removed
-  Requested,  ///< game code or a script asked for it
-  Changed,    ///< something else invalidated it
-};
-
-/// \brief What a navmesh sector is doing, for status displays.
-enum class plAiNavMeshSectorState : plUInt8
-{
-  Queued,     ///< requested, waiting for a build slot
-  Building,   ///< a first build is running
-  Ready,      ///< built and in use
-  Rebuilding, ///< in use while a rebuild is queued or running
-  Failed,     ///< the last build failed; the sector has no polygons
-};
-
 /// \brief State about a single sector (tile / cell) of an plAiNavMesh
 ///
 /// The flags belong to the main thread. While a build runs, its task only writes m_NavmeshDataNew and
@@ -94,18 +74,13 @@ struct plAiNavMeshSector final
   dtTileRef m_TileRef = 0;
   plUInt32 m_uiPolyCount = 0; ///< of the tile in use
   plTime m_LastBuildDuration;
-};
 
-/// \brief One sector's status, for the navmesh panel.
-struct plAiNavMeshSectorStatus
-{
-  plUInt32 m_uiSectorID = 0;
-  plVec2I32 m_vCoord = plVec2I32::MakeZero();
-  plAiNavMeshSectorState m_State = plAiNavMeshSectorState::Queued;
-  plAiNavMeshRebuildReason m_LastReason = plAiNavMeshRebuildReason::None;
-  plUInt32 m_uiPolyCount = 0;
-  plUInt32 m_uiBuildCount = 0;
-  plTime m_LastBuildDuration;
+  plTime m_BuildStarted; ///< when the running build was dispatched
+
+  /// Height range of the tile in use, for the sector views. Kept when the tile goes away.
+  float m_fTileMinZ = 0.0f;
+  float m_fTileMaxZ = 0.0f;
+  bool m_bHasTileBounds = false;
 };
 
 /// \brief A navmesh generated with a specific configuration.
@@ -172,6 +147,17 @@ public:
 
   /// \brief The status of every sector that was ever requested. Main thread only.
   void GetSectorStatus(plDynamicArray<plAiNavMeshSectorStatus>& out_status) const;
+
+  /// \brief Counts the sectors by state. A sector is near the budget at 85 % of uiPolyBudget polygons.
+  static plAiNavMeshStats CalculateStats(plArrayPtr<const plAiNavMeshSectorStatus> sectors, plUInt32 uiPolyBudget);
+
+  /// \brief Whether the polygon count is close to the budget the views and the warning use.
+  static bool IsNearPolyBudget(plUInt32 uiPolyCount, plUInt32 uiPolyBudget) { return plAiIsNearPolyBudget(uiPolyCount, uiPolyBudget); }
+
+  /// \brief Draws the sectors for one of the sector views: filled by state, reason or polygon count, with a border.
+  ///
+  /// Sectors that are building show a progress bar, failed ones a cross. vHighlight, if valid (>= 0), gets a bold outline.
+  void DebugDrawSectors(plDebugRendererContext context, plAiNavMeshVisualizeMode::Enum mode, plUInt32 uiPolyBudget, plVec2I32 vHighlight) const;
 
   /// \brief The most polygons one sector can hold; sectors close to it should be made smaller.
   static constexpr plUInt32 MaxPolysPerSector = 1 << 16;

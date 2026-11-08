@@ -5,8 +5,8 @@ PluginInfo
 {
 	string %DisplayName{"AI Plugin"}
 	string %Category{"AI"}
-	string %MinEngineVersion{"0.11.0"}
-	string %MaxEngineVersion{"0.11.0"}
+	string %MinEngineVersion{"0.11.2"}
+	string %MaxEngineVersion{"0.11.2"}
 	string %Icon{"AIIcon.png"}
     string %Banner{"AIBanner.png"}
 	string %Description{"Adds support for dynamic navmeshes and other AI functionality."}

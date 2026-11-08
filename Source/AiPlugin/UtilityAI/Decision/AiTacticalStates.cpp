@@ -1,5 +1,6 @@
 #include <AiPlugin/AiPluginPCH.h>
 
+#include <AiPlugin/UtilityAI/Components/AiAgentComponent.h>
 #include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
 #include <AiPlugin/UtilityAI/Decision/AiStateMachineStates.h>
 #include <AiPlugin/UtilityAI/Decision/AiTacticalStates.h>
@@ -129,6 +130,12 @@ bool plStateMachineState_AiPickTacticalPoint::SubmitQuery(plStateMachineInstance
 
   plAiTacticalQueryDesc desc = plAiTacticalQueryDesc::MakeFromPreset(static_cast<plAiTacticalQueryPreset::Enum>(m_Preset.GetValue()), vQuerier, vThreat, bHasThreat, m_fRadiusMin, m_fRadiusMax, m_FlankAngle, static_cast<plAiCoverQuality::Enum>(m_MinQuality.GetValue()));
   desc.m_hClaimant = pOwner->GetHandle();
+
+  // the agent's team decides whose threat map and danger areas the query reads
+  if (const plAiAgentComponent* pAgent = nullptr; pOwner->TryGetComponentOfBaseType(pAgent))
+  {
+    desc.m_sTeam = pAgent->GetResolvedTeam();
+  }
 
   pData->m_QueryId = pTactical->SubmitQuery(desc);
   return pData->m_QueryId != plAiTacticalWorldModule::InvalidQueryID;

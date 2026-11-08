@@ -12,6 +12,7 @@
 
 class dtNavMeshQuery;
 class dtQueryFilter;
+class plAiThreatSnapshot;
 class plAiTacticalWorldModule;
 class plPhysicsWorldModuleInterface;
 
@@ -86,6 +87,24 @@ struct PL_AIPLUGIN_DLL plAiEqsContextCombine
 };
 
 PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiEqsContextCombine);
+
+/// \brief What the ThreatMap test reads at an item's position.
+struct PL_AIPLUGIN_DLL plAiEqsThreatLayer
+{
+  using StorageType = plUInt8;
+
+  enum Enum
+  {
+    Safety,     ///< 1 where the querier team's known enemies cannot hurt and no danger area reaches
+    Threat,     ///< the threat of the known enemies, 0 to 1
+    Visibility, ///< 1 where a known enemy has line of sight
+    Danger,     ///< the strongest danger area, 0 to 1
+
+    Default = Safety
+  };
+};
+
+PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiEqsThreatLayer);
 
 struct PL_AIPLUGIN_DLL plAiEqsFilterCondition
 {
@@ -263,6 +282,7 @@ struct PL_AIPLUGIN_DLL plAiEqsEvalContext
   const dtQueryFilter* m_pFilter = nullptr;
   const plPhysicsWorldModuleInterface* m_pPhysics = nullptr;
   const plAiTacticalWorldModule* m_pTactical = nullptr;
+  const plAiThreatSnapshot* m_pThreat = nullptr; ///< the querier team's threat map, nullptr when it has none
   plUInt8 m_uiCollisionLayer = 0;
 
   plUInt32 m_uiRngSeed = 0;

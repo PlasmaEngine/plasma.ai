@@ -136,6 +136,9 @@ private:
   void UpdateReleasedWave(WaveStatus& ref_wave);
   void Release(WaveStatus& ref_wave, const plAiEncounterWaveComponent& wave);
   plInt32 CountAlive(const WaveStatus& wave);
+
+  /// Gives the wave's squad the order the wave carries, if it carries one.
+  void IssueWaveOrder(const WaveStatus& wave_status, const plAiEncounterWaveComponent& wave);
   plUInt32 CountClearedWaves() const;
 
   EncounterState m_State = EncounterState::NotStarted;

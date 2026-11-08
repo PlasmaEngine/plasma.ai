@@ -4,10 +4,13 @@
 #include <AiPlugin/Navigation/NavMesh.h>
 #include <AiPlugin/Tactical/SmartObjects.h>
 #include <AiPlugin/Tactical/TacticalTypes.h>
+#include <AiPlugin/Tactical/ThreatMap.h>
 #include <Core/World/WorldModule.h>
 #include <DetourNavMeshQuery.h>
 #include <Foundation/Threading/AtomicInteger.h>
+#include <Foundation/Threading/Mutex.h>
 #include <Foundation/Threading/TaskSystem.h>
+#include <Foundation/Types/SharedPtr.h>
 
 class plAiCoverBakeTask;
 class plAiNavMeshWorldModule;
@@ -52,6 +55,14 @@ public:
   bool TryGetResult(QueryID id, plAiTacticalQueryResult& out_result) const;
   void ReleaseQuery(QueryID id);
 
+  /// \brief Makes the module remember the candidates of the latest query submitted for this claimant (an agent's object),
+  /// for the AI Debugger. An invalid handle stops remembering.
+  void SetDebugWatched(plGameObjectHandle hClaimant);
+
+  /// \brief What the watched claimant's latest query chose between, best first, and when it completed (world time).
+  /// False until the first query after watching.
+  bool GetDebugCandidates(plDynamicArray<plAiTacticalQueryResult::Candidate>& out_candidates, plTime& out_completedAt) const;
+
   ///@}
 
   /// \name Cover registry
@@ -86,6 +97,16 @@ public:
   bool ClaimCover(const plAiCoverPointHandle& hPoint, plGameObjectHandle hClaimant, plTime timeout);
   void ReleaseClaim(plGameObjectHandle hClaimant);
   bool GetClaimedCover(plGameObjectHandle hClaimant, plAiCoverPointHandle& out_hPoint) const;
+
+  /// \brief One claimed cover point and where it is, for modules that watch what happens around claims.
+  struct ClaimedCover
+  {
+    plGameObjectHandle m_hClaimant;
+    plVec3 m_vPosition = plVec3::MakeZero();
+  };
+
+  /// \brief Every cover claim whose point is still valid.
+  void GetClaimedCovers(plDynamicArray<ClaimedCover>& out_claims) const;
 
   /// \brief Finds a position from which the claimant can fire at the threat from its claimed cover.
   ///
@@ -324,6 +345,7 @@ private:
     plAiTacticalQueryResult m_Result;
     plAiNavMesh* m_pNavMesh = nullptr;      // resolved at submit (module-lifetime stable)
     const dtQueryFilter* m_pFilter = nullptr; // resolved at submit (module-lifetime stable)
+    plSharedPtr<const plAiThreatSnapshot> m_pThreat; // the querier team's map at submit; stable for the worker
     plTime m_CompletedAt;
     plUInt8 m_uiGeneration = 0; // detects stale QueryIDs after slot reuse
     bool m_bInUse = false;
@@ -383,6 +405,13 @@ private:
   };
 
   plDeque<DebugQuery> m_DebugQueries;
+
+  // the candidates of the debugger's watched claimant; written by the query job on a worker
+  mutable plMutex m_DebugMutex;
+  plGameObjectHandle m_hDebugWatched;
+  plHybridArray<plAiTacticalQueryResult::Candidate, 8> m_DebugCandidates;
+  plTime m_DebugCandidateTime;
+  bool m_bHasDebugCandidates = false;
 
   // stats
   plUInt32 m_uiStatBakesInFlight = 0;

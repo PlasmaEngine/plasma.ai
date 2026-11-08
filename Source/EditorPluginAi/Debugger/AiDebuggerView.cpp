@@ -4,6 +4,7 @@
 #include <EditorPluginAi/Debugger/AiDebuggerView.h>
 
 #include <AiPlugin/Eqs/EqsTypes.h>
+#include <AiPlugin/Navigation/NavMeshStatus.h>
 #include <AiPlugin/UtilityAI/Decision/AiDebugSnapshot.h>
 #include <AiPlugin/UtilityAI/Decision/AiScoring.h>
 #include <Core/Utils/Blackboard.h>
@@ -40,6 +41,20 @@ namespace
     plHashedString sHashed;
     sHashed.Assign(sEntry);
     writer.Publish(ref_board, sHashed);
+  }
+
+  /// Ready sectors are quiet, building ones carry the AI colour, failed ones the danger colour.
+  plColorGammaUB SectorStateColor(plAiNavMeshSectorState state)
+  {
+    switch (state)
+    {
+      case plAiNavMeshSectorState::Ready:
+        return plEditorUi::Dim();
+      case plAiNavMeshSectorState::Failed:
+        return plEditorUi::Danger();
+      default:
+        return plAiEngineUi::AiColor();
+    }
   }
 
   plColorGammaUB CategoryColorOrDim(plUInt8 uiCategory)
@@ -599,7 +614,7 @@ void plAiDebuggerView::BuildTabs(plUiElement* pRoot, const plRectFloat& rect)
   if (pWatched != nullptr && !pWatched->m_Targets.IsEmpty())
     sPerception.AppendFormat("  {}", pWatched->m_Targets.GetCount());
 
-  const char* szTabs[] = {"Decision", sPerception.GetData(), "Blackboard", "Navigation", "EQS"};
+  const char* szTabs[] = {"Decision", sPerception.GetData(), "Blackboard", "Navigation", "Squad", "EQS"};
 
   float x = 4.0f;
   for (plUInt32 i = 0; i < PL_ARRAY_SIZE(szTabs); ++i)
@@ -659,8 +674,22 @@ void plAiDebuggerView::BuildTabs(plUiElement* pRoot, const plRectFloat& rect)
     }
   }
 
+  if (m_Tab == Tab::Squad)
+  {
+    // squads belong to the world, not to the agent: the tab has its own layout, with a map that takes pointer input
+    BuildSquad(pPane, plRectFloat(rect.x, rect.y + s_fTabHeight, rect.width, rect.height - s_fTabHeight));
+    return;
+  }
+
   plUiScrollView* pBody = AddScrollBody(pPane, plRectFloat(0.0f, s_fTabHeight, rect.width, rect.height - s_fTabHeight), "Dbg.Body", 0.0f, 0.0f);
   const float fWidth = rect.width - ScrollbarGutter;
+
+  if (m_Tab == Tab::Navigation)
+  {
+    // the navmesh belongs to the world, not to the agent: its sectors show without a watched agent
+    BuildNavigation(pBody, fWidth, pWatched);
+    return;
+  }
 
   if (!m_pSession->GetWatched().IsValid())
   {
@@ -717,8 +746,8 @@ void plAiDebuggerView::BuildTabs(plUiElement* pRoot, const plRectFloat& rect)
       BuildBlackboard(pBody, fWidth, *pWatched);
       break;
     case Tab::Navigation:
-      BuildNavigation(pBody, fWidth, *pWatched);
-      break;
+    case Tab::Squad:
+      break; // built above
     case Tab::Eqs:
       BuildEqs(pBody, fWidth, *pWatched);
       break;
@@ -946,6 +975,7 @@ void plAiDebuggerView::BuildPerception(plUiElement* pBody, float fWidth, const p
   if (watched.m_Targets.IsEmpty())
   {
     BuildEmpty(pBody, fWidth, "Nothing perceived", "The agent remembers no targets. Sight, hearing, damage and custom stimuli add them.");
+    BuildThreat(pBody, fWidth, watched);
     return;
   }
 
@@ -1013,6 +1043,113 @@ void plAiDebuggerView::BuildPerception(plUiElement* pBody, float fWidth, const p
     sPosition.SetFormat("{} ({}, {}, {})", bSeen ? "seen" : (target.m_Object.IsValid() ? "last known" : "event"), plArgF(target.m_vLastKnownPosition.x, 1), plArgF(target.m_vLastKnownPosition.y, 1), plArgF(target.m_vLastKnownPosition.z, 1));
     Label(pRow, plRectFloat(xPosition, 0.0f, plMath::Max(fWidth - xPosition - 8.0f, 40.0f), s_fTableRow), sPosition, target.m_bReported ? Warning() : Muted(), FontSize - 2);
   }
+
+  BuildThreat(pBody, fWidth, watched);
+}
+
+void plAiDebuggerView::BuildThreat(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  // what the agent's team knows where the agent stands
+  Section(pBody, "Threat map", AiColor(), {}, "per team, 2 m cells: line of sight to the enemy positions the team remembers, and danger areas");
+
+  if (!watched.m_bHasThreatMap)
+  {
+    BuildEmpty(pBody, fWidth, "No threat map", watched.m_sTeam.IsEmpty() ? "The agent has no team, so the threat map has nothing to say about it." : "The team has no map yet. It exists once the world simulates.");
+  }
+  else
+  {
+    plStringBuilder sThreat, sDanger;
+    sThreat.SetFormat("{}", plArgF(watched.m_fThreatHere, 2));
+    sDanger.SetFormat("{}", plArgF(watched.m_fDangerHere, 2));
+
+    const char* szRows[][2] = {
+      {"Team", watched.m_sTeam.GetData()},
+      {"Threat here", sThreat.GetData()},
+      {"Danger here", sDanger.GetData()},
+      {"Seen by a known enemy", watched.m_bSeenHere ? "yes" : "no"},
+    };
+
+    for (plUInt32 r = 0; r < PL_ARRAY_SIZE(szRows); ++r)
+    {
+      auto* pRow = Panel(pBody);
+      pRow->m_vOffsets.w = 22.0f;
+      pRow->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+      const bool bDanger = r == 2 && watched.m_fDangerHere > 0.0f;
+
+      Label(pRow, plRectFloat(12.0f, 0.0f, 200.0f, 22.0f), szRows[r][0], Muted(), FontSize - 2);
+      Label(pRow, plRectFloat(212.0f, 0.0f, fWidth - 224.0f, 22.0f), szRows[r][1], bDanger ? Danger() : Foreground(), FontSize - 2, r != 0);
+    }
+  }
+
+  // the positions its latest cover query chose between
+  plStringBuilder sCount;
+  sCount.SetFormat("{}", watched.m_CoverCandidates.GetCount());
+  Section(pBody, "Cover candidates", AiColor(), sCount, "best first \xC2\xB7 score = protection, nearness and safety from the threat, times 1 minus danger");
+
+  if (watched.m_CoverCandidates.IsEmpty())
+  {
+    BuildEmpty(pBody, fWidth, "No cover query yet", "The agent's take-cover or hide behavior fills this when it picks a position.");
+    return;
+  }
+
+  const float fNumber = 52.0f;
+  const float xScore = fWidth - 12.0f - fNumber;
+  const float xDanger = xScore - fNumber;
+  const float xThreat = xDanger - fNumber;
+  const float xProtection = xThreat - fNumber;
+
+  // the header
+  {
+    auto* pHeader = Panel(pBody);
+    pHeader->m_vOffsets.w = 20.0f;
+    pHeader->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+    Label(pHeader, plRectFloat(12.0f, 2.0f, xProtection - 20.0f, 16.0f), "POINT", Dim(), MinFontSize);
+
+    const char* szColumns[] = {"PROT", "THR", "DNG", "SCORE"};
+    const float xColumns[] = {xProtection, xThreat, xDanger, xScore};
+    for (plUInt32 i = 0; i < PL_ARRAY_SIZE(szColumns); ++i)
+    {
+      Label(pHeader, plRectFloat(xColumns[i], 2.0f, fNumber, 16.0f), szColumns[i], Dim(), MinFontSize)->m_HAlign = plUiTextHAlign::Right;
+    }
+  }
+
+  for (plUInt32 i = 0; i < watched.m_CoverCandidates.GetCount() && i < 10; ++i)
+  {
+    const plAiDebugFrame::Watched::CoverCandidate& candidate = watched.m_CoverCandidates[i];
+
+    auto* pRow = Panel(pBody);
+    pRow->m_vOffsets.w = s_fTableRow;
+    pRow->m_Color = candidate.m_bPicked ? Mix(Surface(), Accent(), 0.08f) : plColorGammaUB(0, 0, 0, 0);
+
+    plStringBuilder sPoint;
+    sPoint.SetFormat("({}, {}, {})", plArgF(candidate.m_vPosition.x, 1), plArgF(candidate.m_vPosition.y, 1), plArgF(candidate.m_vPosition.z, 1));
+    const float fPoint = TextWidth(sPoint, FontSize - 2);
+    Label(pRow, plRectFloat(12.0f, 0.0f, fPoint, s_fTableRow), sPoint, Foreground(), FontSize - 2, true);
+
+    float x = 20.0f + fPoint;
+    if (candidate.m_uiQuality != 0)
+    {
+      x += Badge(pRow, x, (s_fTableRow - BadgeHeight) * 0.5f, candidate.m_uiQuality == plAiCoverQuality::High ? "high" : "low", Dim()) + 4.0f;
+    }
+
+    if (candidate.m_bPicked)
+    {
+      Badge(pRow, x, (s_fTableRow - BadgeHeight) * 0.5f, "picked", AiColor());
+    }
+
+    const float fValues[] = {candidate.m_fProtection, candidate.m_fThreat, candidate.m_fDanger, candidate.m_fScore};
+    const float xColumns[] = {xProtection, xThreat, xDanger, xScore};
+    for (plUInt32 c = 0; c < PL_ARRAY_SIZE(fValues); ++c)
+    {
+      const bool bDanger = c == 2 && fValues[c] > 0.0f;
+      Label(pRow, plRectFloat(xColumns[c], 0.0f, fNumber, s_fTableRow), FormatNumber(fValues[c], 2), bDanger ? Danger() : (c == 3 ? Foreground() : Muted()), FontSize - 2, true)->m_HAlign = plUiTextHAlign::Right;
+    }
+  }
 }
 
 void plAiDebuggerView::BuildBlackboard(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched)
@@ -1049,12 +1186,306 @@ void plAiDebuggerView::BuildBlackboard(plUiElement* pBody, float fWidth, const p
   }
 }
 
-void plAiDebuggerView::BuildNavigation(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched& watched)
+void plAiDebuggerView::BuildNavmeshSectors(plUiElement* pBody, float fWidth)
 {
   using namespace plEditorUi;
   using namespace plAiEngineUi;
 
-  Section(pBody, "Navigation", AiColor(), {}, "the agent's navigation component, as the engine reports it");
+  const plAiDebugFrame::Navmesh& nav = m_pSession->GetFrame().m_Navmesh;
+
+  if (!nav.m_bPresent)
+  {
+    Section(pBody, "Navmesh sectors", AiColor(), {}, "what the navmesh builds, and why");
+    BuildEmpty(pBody, fWidth, "No navmesh", "The world has no navmesh yet. It exists once a scene with navigation components has simulated.");
+    return;
+  }
+
+  // the section with its tools: the build slots and a rebuild of the inspected sector
+  {
+    plStringBuilder sCount, sHint;
+    sCount.SetFormat("{}", nav.m_Sectors.GetCount());
+    sHint.SetFormat("'{}' \xC2\xB7 {} x {} sectors of {} m", nav.m_sName, nav.m_uiSectorsX, nav.m_uiSectorsY, plArgF(nav.m_fSectorSize, 0));
+
+    const char* szRebuild = "Rebuild sector";
+    const float fRebuild = TextWidth(szRebuild) + 42.0f;
+    const float fMaxLabel = TextWidth("Max builds", FontSize - 2) + 6.0f;
+    const float fChip = 26.0f;
+    const float fTools = fRebuild + 12.0f + fMaxLabel + 3.0f * (fChip + 3.0f);
+
+    plUiPanel* pSection = Section(pBody, "Navmesh sectors", AiColor(), sCount, sHint, fTools + 8.0f);
+
+    float x = -fTools - 6.0f;
+    auto placeRight = [&](plUiElement* pElement, float fWidthOfElement)
+    {
+      pElement->m_vAnchorMin.x = pElement->m_vAnchorMax.x = 1.0f;
+      pElement->m_vOffsets.x = x;
+      x += fWidthOfElement + 3.0f;
+    };
+
+    const plVec2I32 inspected = m_pSession->GetInspectedSector();
+
+    plUiButton* pRebuild = AddTextButton(pSection, plRectFloat(0, 1.0f, fRebuild, ControlHeight), "Dbg.NavRebuild", szRebuild, "Queues a rebuild of the inspected sector.", [this]()
+      {
+      m_pSession->RebuildInspectedSector();
+      Invalidate(); }, false, inspected.x >= 0);
+
+    auto* pText = static_cast<plUiText*>(pRebuild->m_Children[0]);
+    pText->m_HAlign = plUiTextHAlign::Left;
+    pText->m_vOffsets.x = 28.0f;
+
+    plUiImage* pIcon = SvgImage(pRebuild, IconPath(Icon::Refresh));
+    pIcon->m_vAnchorMin = pIcon->m_vAnchorMax = plVec2(0, 0.5f);
+    pIcon->m_vOffsets = plVec4(9, -7, 14, 14);
+    pIcon->m_Color = Muted();
+
+    placeRight(pRebuild, fRebuild + 9.0f);
+
+    plUiText* pMaxLabel = Label(pSection, plRectFloat(0, 0, fMaxLabel, SectionHeight), "Max builds", Muted(), FontSize - 2);
+    pMaxLabel->m_vAnchorMin.x = pMaxLabel->m_vAnchorMax.x = 1.0f;
+    pMaxLabel->m_vOffsets.x = x;
+    x += fMaxLabel;
+
+    const plUInt32 uiSlots[] = {1, 2, 4};
+    for (plUInt32 i = 0; i < PL_ARRAY_SIZE(uiSlots); ++i)
+    {
+      plStringBuilder sLabel;
+      sLabel.SetFormat("{}", uiSlots[i]);
+
+      const plUInt32 uiSlot = uiSlots[i];
+      // a chip is a plate plus a click area, so it takes an absolute position instead of right anchors
+      AddChip(pSection, plRectFloat(fWidth + x, 2.0f, fChip, 22.0f),Name("Dbg.NavSlots.", uiSlot), sLabel, nav.m_uiMaxBuilds == uiSlot, plColorGammaUB(0, 0, 0, 0), "How many sectors build at the same time (AI.Navmesh.MaxConcurrentBuilds).", [this, uiSlot]()
+        {
+        m_pSession->SetIntCVar("AI.Navmesh.MaxConcurrentBuilds", static_cast<plInt32>(uiSlot));
+        Invalidate(); });
+      x += fChip + 3.0f;
+    }
+  }
+
+  // the view modes: the same radio group as the AI Overlays menu
+  {
+    auto* pRow = Panel(pBody);
+    pRow->m_vOffsets.w = 34.0f;
+    pRow->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+    const float fLabel = TextWidth("View", FontSize - 2) + 16.0f;
+    Label(pRow, plRectFloat(12.0f, 0.0f, fLabel, 34.0f), "View", Muted(), FontSize - 2);
+
+    const plArrayPtr<const plAiDebugOverlay> overlays = plAiGetDebugOverlays();
+    float x = 12.0f + fLabel;
+
+    for (plUInt32 i = 0; i < overlays.GetCount(); ++i)
+    {
+      if (overlays[i].m_szRadioGroup == nullptr || !plStringUtils::IsEqual(overlays[i].m_szRadioGroup, "NavmeshView"))
+        continue;
+
+      const bool bOn = (m_pSession->GetFrame().m_uiOverlays & PL_BIT(i)) != 0;
+      const float fChipWidth = ChipWidth(overlays[i].m_szLabel, false);
+
+      AddChip(pRow, plRectFloat(x, 6.0f, fChipWidth, 22.0f), Name("Dbg.NavView.", i), overlays[i].m_szLabel, bOn, plColorGammaUB(0, 0, 0, 0), "Draws the navmesh in the viewport this way (AI Overlays menu, Navigation).", [this, i, bOn]()
+        {
+        m_pSession->SetOverlay(i, !bOn);
+        Invalidate(); });
+
+      x += fChipWidth + 4.0f;
+    }
+  }
+
+  // the inspected sector
+  const plVec2I32 inspected = m_pSession->GetInspectedSector();
+  const plAiDebugFrame::NavSector* pInspected = nullptr;
+  for (const plAiDebugFrame::NavSector& sector : nav.m_Sectors)
+  {
+    if (sector.m_vCoord == inspected)
+      pInspected = &sector;
+  }
+
+  if (pInspected == nullptr)
+  {
+    BuildEmpty(pBody, fWidth, "No sector selected", "Watch an agent to see the sector it stands in, or click a sector in the lists below.");
+  }
+  else
+  {
+    const plAiNavMeshSectorState state = static_cast<plAiNavMeshSectorState>(pInspected->m_uiState);
+    const bool bNear = plAiIsNearPolyBudget(pInspected->m_uiPolys, nav.m_uiPolyBudget);
+
+    plStringBuilder sTitle;
+    sTitle.SetFormat("Navmesh Sector ({}, {})", inspected.x, inspected.y);
+
+    auto* pTitle = Panel(pBody);
+    pTitle->m_vOffsets.w = 28.0f;
+    pTitle->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+    const float fTitle = TextWidth(sTitle, FontSize - 1);
+    Label(pTitle, plRectFloat(12.0f, 0.0f, fTitle, 28.0f), sTitle, Foreground(), FontSize - 1);
+    Badge(pTitle, 20.0f + fTitle, 6.0f, plAiNavMeshSectorStateName(state), SectorStateColor(state));
+
+    const char* szSource = m_pSession->IsSectorPicked() ? "picked" : "under the watched agent";
+    const float fSource = TextWidth(szSource, FontSize - 2);
+    Label(pTitle, plRectFloat(fWidth - fSource - 12.0f - (m_pSession->IsSectorPicked() ? 90.0f : 0.0f), 0.0f, fSource, 28.0f), szSource, Dim(), FontSize - 2);
+
+    if (m_pSession->IsSectorPicked())
+    {
+      AddChip(pTitle, plRectFloat(fWidth - 84.0f, 3.0f, 78.0f, 22.0f), "Dbg.NavFollow", "Follow", false, plColorGammaUB(0, 0, 0, 0), "Goes back to the sector under the watched agent.", [this]()
+        {
+        m_pSession->PickSector(plVec2I32(-1, -1));
+        Invalidate(); });
+    }
+
+    plStringBuilder sPolys, sBuilds, sMs;
+    sPolys.SetFormat("{} / {}", pInspected->m_uiPolys, nav.m_uiPolyBudget);
+    sBuilds.SetFormat("{}", pInspected->m_uiBuilds);
+    sMs.SetFormat("{} ms", plArgF(pInspected->m_fBuildMs, 0));
+
+    const char* szRows[][2] = {
+      {"Last reason", plAiNavMeshRebuildReasonName(static_cast<plAiNavMeshRebuildReason>(pInspected->m_uiReason))},
+      {"Polygons", sPolys.GetData()},
+      {"", ""},
+      {"Builds", sBuilds.GetData()},
+      {"Last build", sMs.GetData()},
+    };
+
+    for (plUInt32 r = 0; r < PL_ARRAY_SIZE(szRows); ++r)
+    {
+      auto* pRow = Panel(pBody);
+      pRow->m_vOffsets.w = 22.0f;
+      pRow->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+      if (r == 2)
+      {
+        // the polygon bar under the count, against the budget
+        const plString sBar = Name("Dbg.NavPolys.", 0);
+        const float fBar = fWidth - 224.0f;
+        AddDrawList(pRow, plRectFloat(212.0f, 7.0f, fBar, 8.0f), sBar);
+        plUiDrawListWriter bar;
+        DrawBar(bar, plRectFloat(0.0f, 0.0f, fBar, 8.0f), nav.m_uiPolyBudget > 0 ? static_cast<float>(pInspected->m_uiPolys) / nav.m_uiPolyBudget : 0.0f, bNear ? Warning() : AiColor());
+        Publish(GetBoard(), bar, sBar);
+        continue;
+      }
+
+      Label(pRow, plRectFloat(12.0f, 0.0f, 200.0f, 22.0f), szRows[r][0], Muted(), FontSize - 2);
+      Label(pRow, plRectFloat(212.0f, 0.0f, fWidth - 224.0f, 22.0f), szRows[r][1], Foreground(), FontSize - 2, true);
+    }
+
+    const char* szNote = nullptr;
+    plColorGammaUB noteColor = Dim();
+
+    if (state == plAiNavMeshSectorState::Failed)
+    {
+      szNote = "Last build failed. Agents in this sector report NoPathFound. Rebuild retries it.";
+      noteColor = Danger();
+    }
+    else if (bNear)
+    {
+      szNote = "Close to the polygon limit. Mark clutter as not walkable or raise the cell size.";
+      noteColor = Warning();
+    }
+
+    if (szNote != nullptr)
+    {
+      auto* pNote = Panel(pBody);
+      pNote->m_vOffsets.w = 36.0f;
+      pNote->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+      auto* pLabel = Label(pNote, plRectFloat(12.0f, 4.0f, fWidth - 24.0f, 30.0f), szNote, noteColor, FontSize - 2);
+      pLabel->m_bWrap = true;
+      pLabel->m_VAlign = plUiTextVAlign::Top;
+    }
+  }
+
+  // the build queue: sectors that wait or build, running ones first; then the ones that need a look
+  plHybridArray<const plAiDebugFrame::NavSector*, 32> queue;
+  plHybridArray<const plAiDebugFrame::NavSector*, 32> attention;
+
+  for (const plAiDebugFrame::NavSector& sector : nav.m_Sectors)
+  {
+    const plAiNavMeshSectorState state = static_cast<plAiNavMeshSectorState>(sector.m_uiState);
+
+    if (state == plAiNavMeshSectorState::Queued || state == plAiNavMeshSectorState::Building || state == plAiNavMeshSectorState::Rebuilding)
+      queue.PushBack(&sector);
+    else if (state == plAiNavMeshSectorState::Failed || plAiIsNearPolyBudget(sector.m_uiPolys, nav.m_uiPolyBudget))
+      attention.PushBack(&sector);
+  }
+
+  queue.Sort([](const plAiDebugFrame::NavSector* a, const plAiDebugFrame::NavSector* b) { return a->m_bRunning && !b->m_bRunning; });
+
+  const auto buildRows = [&](const plHybridArray<const plAiDebugFrame::NavSector*, 32>& sectors, const char* szPrefix, bool bQueue)
+  {
+    for (plUInt32 i = 0; i < sectors.GetCount() && i < 12; ++i)
+    {
+      const plAiDebugFrame::NavSector& sector = *sectors[i];
+      const plAiNavMeshSectorState state = static_cast<plAiNavMeshSectorState>(sector.m_uiState);
+
+      auto* pRow = Panel(pBody);
+      pRow->m_vOffsets.w = s_fTableRow;
+      pRow->m_Color = sector.m_vCoord == inspected ? Mix(Surface(), Accent(), 0.08f) : plColorGammaUB(0, 0, 0, 0);
+
+      plStringBuilder sText;
+      sText.SetFormat("Sector ({}, {}) \xC2\xB7 {}", sector.m_vCoord.x, sector.m_vCoord.y, plAiNavMeshRebuildReasonName(static_cast<plAiNavMeshRebuildReason>(sector.m_uiReason)));
+      Label(pRow, plRectFloat(12.0f, 0.0f, fWidth - 220.0f, s_fTableRow), sText, Foreground(), FontSize - 2);
+
+      if (bQueue)
+      {
+        const plString sBar = Name(szPrefix, i);
+        AddDrawList(pRow, plRectFloat(fWidth - 190.0f, 8.0f, 90.0f, 8.0f), sBar);
+        plUiDrawListWriter bar;
+        DrawBar(bar, plRectFloat(0.0f, 0.0f, 90.0f, 8.0f), sector.m_bRunning ? sector.m_fProgress : 0.0f, AiColor());
+        Publish(GetBoard(), bar, sBar);
+      }
+
+      plStringBuilder sState;
+      if (bQueue)
+        sState = sector.m_bRunning ? "building" : "queued";
+      else if (state == plAiNavMeshSectorState::Failed)
+        sState = "failed";
+      else
+        sState.SetFormat("{} polygons", sector.m_uiPolys);
+
+      Label(pRow, plRectFloat(fWidth - 92.0f, 0.0f, 80.0f, s_fTableRow), sState, state == plAiNavMeshSectorState::Failed ? Danger() : (bQueue ? Dim() : Warning()), FontSize - 2);
+
+      const plVec2I32 coord = sector.m_vCoord;
+      AddClickArea(pRow, plRectFloat(0.0f, 0.0f, fWidth, s_fTableRow), Name(szPrefix, i, ".Pick"), "Inspect this sector and outline it in the viewport.", [this, coord]()
+        {
+        m_pSession->PickSector(coord);
+        Invalidate(); });
+    }
+  };
+
+  {
+    plStringBuilder sCount;
+    sCount.SetFormat("{}", queue.GetCount());
+    Section(pBody, "Build queue", AiColor(), queue.IsEmpty() ? plStringView("idle") : plStringView(sCount), "moving a blocker or nav link queues the sectors it touches");
+
+    if (queue.IsEmpty())
+      BuildEmpty(pBody, fWidth, "No sectors waiting", "All requested sectors are built.");
+    else
+      buildRows(queue, "Dbg.NavQueue.", true);
+  }
+
+  if (!attention.IsEmpty())
+  {
+    plStringBuilder sCount;
+    sCount.SetFormat("{}", attention.GetCount());
+    Section(pBody, "Needs a look", Warning(), sCount, "failed builds and sectors close to the polygon limit");
+    buildRows(attention, "Dbg.NavAttention.", false);
+  }
+}
+
+void plAiDebuggerView::BuildNavigation(plUiElement* pBody, float fWidth, const plAiDebugFrame::Watched* pWatched)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  BuildNavmeshSectors(pBody, fWidth);
+
+  Section(pBody, "Agent navigation", AiColor(), {}, "the watched agent's navigation component, as the engine reports it");
+
+  if (pWatched == nullptr)
+  {
+    BuildEmpty(pBody, fWidth, "No agent watched", "Pick an agent to see its navigation component.");
+    return;
+  }
+
+  const plAiDebugFrame::Watched& watched = *pWatched;
 
   if (watched.m_sNavigation.IsEmpty())
   {
@@ -1090,6 +1521,758 @@ void plAiDebuggerView::BuildNavigation(plUiElement* pBody, float fWidth, const p
 
     Label(pRow, plRectFloat(12.0f, 0.0f, 200.0f, 22.0f), row[0], Muted(), FontSize - 2);
     Label(pRow, plRectFloat(212.0f, 0.0f, fWidth - 224.0f, 22.0f), row[1], Foreground(), FontSize - 2, true);
+  }
+}
+
+//////////////////////////////////////////////////////////////////////////
+// the Squad tab
+
+namespace
+{
+  const char* SquadIntentName(plUInt8 uiIntent)
+  {
+    switch (uiIntent)
+    {
+      case plAiSquadIntent::Engage:
+        return "Engage";
+      case plAiSquadIntent::Advance:
+        return "Advance";
+      case plAiSquadIntent::Hold:
+        return "Hold";
+      case plAiSquadIntent::Retreat:
+        return "Retreat";
+      default:
+        return "None";
+    }
+  }
+
+  /// What a member does under an intent: the roles of the mockup.
+  const char* SquadRole(plUInt8 uiIntent, bool bMoveToken)
+  {
+    switch (uiIntent)
+    {
+      case plAiSquadIntent::Hold:
+        return "Hold position";
+      case plAiSquadIntent::Advance:
+        return bMoveToken ? "Bound" : "Fire from cover";
+      case plAiSquadIntent::Engage:
+        return "Fire from cover";
+      case plAiSquadIntent::Retreat:
+        return "Fall back";
+      default:
+        return "Free";
+    }
+  }
+
+  plAiSquadOrder MakeSlotOrder(const plAiDebugFrame::Squad& squad)
+  {
+    plAiSquadOrder order;
+    order.m_bHasRegion = squad.m_bOrderRegion;
+    order.m_vRegionMin = squad.m_vRegionMin;
+    order.m_vRegionMax = squad.m_vRegionMax;
+    return order;
+  }
+} // namespace
+
+const plAiDebugFrame::Squad* plAiDebuggerView::FindSquad() const
+{
+  const plAiDebugFrame& frame = m_pSession->GetFrame();
+
+  for (const plAiDebugFrame::Squad& squad : frame.m_Squads)
+  {
+    if (squad.m_sId == m_sSquad)
+      return &squad;
+  }
+
+  return frame.m_Squads.IsEmpty() ? nullptr : &frame.m_Squads[0];
+}
+
+plVec2 plAiDebuggerView::SquadMapToWorld(const plVec2& vSurface) const
+{
+  const float x = vSurface.x - m_SquadMapRect.x;
+  const float y = m_SquadMapRect.height - (vSurface.y - m_SquadMapRect.y);
+
+  return plVec2(m_vSquadMapMin.x + x / plMath::Max(m_fSquadMapScale, 0.0001f), m_vSquadMapMin.y + y / plMath::Max(m_fSquadMapScale, 0.0001f));
+}
+
+void plAiDebuggerView::IssueSquadDraft()
+{
+  const plAiDebugFrame::Squad* pSquad = FindSquad();
+  if (pSquad == nullptr)
+    return;
+
+  m_pSession->IssueSquadOrder(pSquad->m_sId, m_uiSquadIntent, m_bSquadDraft, m_vSquadDraftMin, m_vSquadDraftMax, m_fSquadSeconds, m_bSquadNoRetreat);
+  m_bSquadDraft = false;
+  Invalidate();
+}
+
+namespace
+{
+  /// A grid step in meters that is at least fMinMeters wide.
+  float NiceGridStep(float fMinMeters)
+  {
+    const float fSteps[] = {1.0f, 2.0f, 5.0f, 10.0f, 20.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f};
+
+    for (const float fStep : fSteps)
+    {
+      if (fStep >= fMinMeters)
+        return fStep;
+    }
+
+    return 2000.0f;
+  }
+} // namespace
+
+void plAiDebuggerView::PublishSquadWorld(plUiDrawListWriter& w, const plRectFloat& local)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  const float fHeight = local.height;
+  const float fScale = plMath::Max(m_fSquadMapScale, 0.0001f);
+  const plVec2 vViewMin = m_vSquadMapMin;
+  const plVec2 vViewMax = m_vSquadMapMin + plVec2(local.width, fHeight) / fScale;
+  const float fStep = NiceGridStep(56.0f / fScale);
+
+  auto toMap = [&](const plVec2& vWorld) { return plVec2((vWorld.x - vViewMin.x) * fScale, fHeight - (vWorld.y - vViewMin.y) * fScale); };
+
+  const plAiDebugFrame::Navmesh& nav = m_pSession->GetFrame().m_Navmesh;
+  const bool bSectors = nav.m_bPresent && nav.m_fSectorSize > 0.0f;
+
+  if (bSectors)
+  {
+    // the navmesh's sector grid, centered on the world origin: the sectors that are built are lit, the others outlined
+    const float fSize = nav.m_fSectorSize;
+    const plVec2 vOrigin(-0.5f * nav.m_uiSectorsX * fSize, -0.5f * nav.m_uiSectorsY * fSize);
+    const plVec2 vOriginEnd = vOrigin + plVec2(nav.m_uiSectorsX * fSize, nav.m_uiSectorsY * fSize);
+
+    for (const plAiDebugFrame::NavSector& sector : nav.m_Sectors)
+    {
+      const plVec2 vMin = vOrigin + plVec2(sector.m_vCoord.x * fSize, sector.m_vCoord.y * fSize);
+      const plVec2 a = toMap(vMin);
+      const plVec2 b = toMap(vMin + plVec2(fSize));
+      const plRectFloat cell(a.x, b.y, b.x - a.x, a.y - b.y);
+
+      if (cell.x > local.width || cell.y > fHeight || cell.x + cell.width < 0.0f || cell.y + cell.height < 0.0f)
+        continue;
+
+      const plAiNavMeshSectorState state = static_cast<plAiNavMeshSectorState>(sector.m_uiState);
+
+      if (state == plAiNavMeshSectorState::Ready || state == plAiNavMeshSectorState::Rebuilding)
+        w.Rect(cell, WithAlpha(Foreground(), 12));
+      else
+        w.RectOutline(cell, Dim(), 1.0f);
+
+      if (cell.width >= 44.0f)
+      {
+        plStringBuilder sCoord;
+        sCoord.SetFormat("{}, {}", sector.m_vCoord.x, sector.m_vCoord.y);
+        w.Text(plRectFloat(cell.x + 5.0f, cell.y + 3.0f, cell.width - 8.0f, 14.0f), sCoord, Dim(), FontSize - 3);
+      }
+    }
+
+    for (plUInt32 i = 0; i <= nav.m_uiSectorsX; ++i)
+    {
+      const float x = vOrigin.x + i * fSize;
+      if (x >= vViewMin.x && x <= vViewMax.x)
+        w.Line(toMap(plVec2(x, vOrigin.y)), toMap(plVec2(x, vOriginEnd.y)), Line(), 1.0f);
+    }
+
+    for (plUInt32 i = 0; i <= nav.m_uiSectorsY; ++i)
+    {
+      const float y = vOrigin.y + i * fSize;
+      if (y >= vViewMin.y && y <= vViewMax.y)
+        w.Line(toMap(plVec2(vOrigin.x, y)), toMap(plVec2(vOriginEnd.x, y)), Line(), 1.0f);
+    }
+  }
+  else
+  {
+    // without a navmesh a meter grid still tells where things are
+    for (float x = plMath::Ceil(vViewMin.x / fStep) * fStep; x <= vViewMax.x; x += fStep)
+      w.Line(toMap(plVec2(x, vViewMin.y)), toMap(plVec2(x, vViewMax.y)), Line(), 1.0f);
+
+    for (float y = plMath::Ceil(vViewMin.y / fStep) * fStep; y <= vViewMax.y; y += fStep)
+      w.Line(toMap(plVec2(vViewMin.x, y)), toMap(plVec2(vViewMax.x, y)), Line(), 1.0f);
+  }
+
+  // the meters along the bottom and left edges
+  plStringBuilder sTick;
+
+  for (float x = plMath::Ceil(vViewMin.x / fStep) * fStep; x <= vViewMax.x; x += fStep)
+  {
+    const float fX = toMap(plVec2(x, 0.0f)).x;
+    sTick.SetFormat("{} m", plArgF(x, 0));
+    w.Line(plVec2(fX, fHeight - 5.0f), plVec2(fX, fHeight), Muted(), 1.0f);
+    w.Text(plRectFloat(fX + 3.0f, fHeight - 17.0f, 64.0f, 12.0f), sTick, Dim(), FontSize - 3);
+  }
+
+  for (float y = plMath::Ceil(vViewMin.y / fStep) * fStep; y <= vViewMax.y; y += fStep)
+  {
+    const float fY = toMap(plVec2(0.0f, y)).y;
+    if (fY > fHeight - 24.0f)
+      continue;
+
+    sTick.SetFormat("{} m", plArgF(y, 0));
+    w.Line(plVec2(0.0f, fY), plVec2(5.0f, fY), Muted(), 1.0f);
+    w.Text(plRectFloat(8.0f, fY - 13.0f, 64.0f, 12.0f), sTick, Dim(), FontSize - 3);
+  }
+
+  // what the map is: a plan view, the sector grid it follows, and the markers
+  {
+    plStringBuilder sInfo;
+    sInfo.SetFormat("Plan view \xC2\xB7 +X right, +Y up");
+
+    if (bSectors)
+      sInfo.AppendFormat(" \xC2\xB7 sectors {} \xC3\x97 {} of {} m", nav.m_uiSectorsX, nav.m_uiSectorsY, plArgF(nav.m_fSectorSize, 0));
+
+    w.Text(plRectFloat(10.0f, 6.0f, local.width * 0.5f, 14.0f), sInfo, Muted(), FontSize - 3);
+
+    float fRight = local.width - 10.0f;
+
+    auto legend = [&](const char* szLabel, const plColorGammaUB& fill, const plColorGammaUB& ring, float fRadius)
+    {
+      const float fText = TextWidth(szLabel, FontSize - 3);
+      fRight -= fText;
+      w.Text(plRectFloat(fRight, 6.0f, fText + 2.0f, 14.0f), szLabel, Muted(), FontSize - 3);
+      fRight -= 12.0f;
+      w.Circle(plVec2(fRight + 4.0f, 13.0f), fRadius, fill, ring, 1.5f);
+      fRight -= 12.0f;
+    };
+
+    legend("Other agents", Dim(), plColorGammaUB(0, 0, 0, 0), 3.0f);
+    legend("Other squads", Field(), Muted(), 4.5f);
+    legend("This squad", Field(), AiColor(), 5.0f);
+  }
+}
+
+void plAiDebuggerView::PublishSquadOthers(plUiDrawListWriter& w, const plRectFloat& local, const plAiDebugFrame::Squad* pSquad)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  const plAiDebugFrame& frame = m_pSession->GetFrame();
+  const float fHeight = local.height;
+
+  auto toMap = [&](const plVec2& vWorld) { return plVec2((vWorld.x - m_vSquadMapMin.x) * m_fSquadMapScale, fHeight - (vWorld.y - m_vSquadMapMin.y) * m_fSquadMapScale); };
+
+  plHybridArray<plUuid, 32> inSquads;
+
+  for (const plAiDebugFrame::Squad& squad : frame.m_Squads)
+  {
+    for (const plAiDebugFrame::SquadMember& member : squad.m_Members)
+      inSquads.PushBack(member.m_Object);
+  }
+
+  // the other squads: their order's region and their members, named by the squad
+  for (const plAiDebugFrame::Squad& squad : frame.m_Squads)
+  {
+    if (pSquad != nullptr && squad.m_sId == pSquad->m_sId)
+      continue;
+
+    if (squad.m_bHasOrder && squad.m_bOrderRegion)
+    {
+      const plVec2 a = toMap(squad.m_vRegionMin);
+      const plVec2 b = toMap(squad.m_vRegionMax);
+      w.RectOutline(plRectFloat(plMath::Min(a.x, b.x), plMath::Min(a.y, b.y), plMath::Abs(b.x - a.x), plMath::Abs(b.y - a.y)), Dim(), 1.0f);
+    }
+
+    for (plUInt32 i = 0; i < squad.m_Members.GetCount(); ++i)
+    {
+      const plVec2 vMember = toMap(squad.m_Members[i].m_vPosition.GetAsVec2());
+      w.Circle(vMember, 5.0f, Field(), Muted(), 1.5f);
+
+      if (i == 0)
+      {
+        plStringBuilder sLabel;
+        sLabel.SetFormat("{} ({})", squad.m_sId, squad.m_Members.GetCount());
+        w.Text(plRectFloat(vMember.x + 9.0f, vMember.y - 16.0f, 140.0f, 14.0f), sLabel, Muted(), FontSize - 2);
+      }
+    }
+  }
+
+  // the agents that are in no squad
+  plUInt32 uiLabels = 0;
+
+  for (const plAiDebugFrame::Agent& agent : frame.m_Agents)
+  {
+    if (inSquads.Contains(agent.m_Object))
+      continue;
+
+    const plVec2 vAgent = toMap(agent.m_vPosition.GetAsVec2());
+    if (!local.Contains(vAgent))
+      continue;
+
+    w.Circle(vAgent, 3.0f, Dim());
+
+    if (uiLabels < 48)
+    {
+      ++uiLabels;
+      w.Text(plRectFloat(vAgent.x + 6.0f, vAgent.y - 7.0f, 110.0f, 14.0f), agent.m_sName.GetView(), Dim(), FontSize - 3);
+    }
+  }
+}
+
+void plAiDebuggerView::PublishSquadMap(const plAiDebugFrame::Squad* pSquad)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  if (m_sSquadMapEntry.IsEmpty())
+    return;
+
+  plUiDrawListWriter w;
+  const plRectFloat local(0.0f, 0.0f, m_SquadMapRect.width, m_SquadMapRect.height);
+
+  w.Rect(local, Field());
+  w.PushClip(local);
+
+  PublishSquadWorld(w, local);
+  PublishSquadOthers(w, local, pSquad);
+
+  if (pSquad != nullptr)
+  {
+    const float fHeight = local.height;
+    auto toMap = [&](const plVec2& vWorld) { return plVec2((vWorld.x - m_vSquadMapMin.x) * m_fSquadMapScale, fHeight - (vWorld.y - m_vSquadMapMin.y) * m_fSquadMapScale); };
+
+    auto dashedRect = [&](const plVec2& vMin, const plVec2& vMax, const plColorGammaUB& color)
+    {
+      const plVec2 a = toMap(vMin);
+      const plVec2 b = toMap(vMax);
+      const plVec2 corners[4] = {plVec2(a.x, a.y), plVec2(b.x, a.y), plVec2(b.x, b.y), plVec2(a.x, b.y)};
+
+      for (plUInt32 i = 0; i < 4; ++i)
+      {
+        w.Line(corners[i], corners[(i + 1) % 4], color, 1.5f, 5.0f, 4.0f);
+      }
+    };
+
+    const plColorGammaUB rose = AiColor();
+
+    // the rally point
+    {
+      const plVec2 vHome = pSquad->m_vHome.GetAsVec2();
+      dashedRect(vHome - plVec2(6.0f, 4.0f), vHome + plVec2(6.0f, 4.0f), Dim());
+      const plVec2 vLabel = toMap(vHome + plVec2(-6.0f, 4.0f));
+      w.Text(plRectFloat(vLabel.x, vLabel.y - 15.0f, 120.0f, 14.0f), "Rally point", Dim(), FontSize - 2);
+    }
+
+    // the order's region while it lasts, else the one being drawn
+    if (pSquad->m_bHasOrder && pSquad->m_bOrderRegion)
+    {
+      const plVec2 a = toMap(pSquad->m_vRegionMin);
+      const plVec2 b = toMap(pSquad->m_vRegionMax);
+      const plRectFloat rect(plMath::Min(a.x, b.x), plMath::Min(a.y, b.y), plMath::Abs(b.x - a.x), plMath::Abs(b.y - a.y));
+      w.Rect(rect, WithAlpha(rose, 30));
+      w.RectOutline(rect, rose, 1.5f);
+
+      plStringBuilder sLabel;
+      sLabel.SetFormat("{}", SquadIntentName(pSquad->m_uiOrderIntent));
+      if (pSquad->m_fOrderRemaining > 0.0)
+        sLabel.AppendFormat(" \xC2\xB7 {} s", plArgF(pSquad->m_fOrderRemaining, 0));
+
+      w.Text(plRectFloat(rect.x + 4.0f, rect.y - 16.0f, 160.0f, 14.0f), sLabel, Mix(rose, Foreground(), 0.4f), FontSize - 2);
+    }
+    else if (m_bSquadDraft)
+    {
+      const plVec2 a = toMap(m_vSquadDraftMin);
+      const plVec2 b = toMap(m_vSquadDraftMax);
+      const plRectFloat rect(plMath::Min(a.x, b.x), plMath::Min(a.y, b.y), plMath::Abs(b.x - a.x), plMath::Abs(b.y - a.y));
+      w.Rect(rect, WithAlpha(Accent(), 20));
+      dashedRect(m_vSquadDraftMin, m_vSquadDraftMax, Accent());
+
+      plStringBuilder sLabel;
+      sLabel.SetFormat("Draft region \xC2\xB7 {}", SquadIntentName(m_uiSquadIntent));
+      w.Text(plRectFloat(rect.x + 4.0f, rect.y - 16.0f, 200.0f, 14.0f), sLabel, Mix(Accent(), Foreground(), 0.4f), FontSize - 2);
+    }
+
+    // the target the squad shares
+    if (pSquad->m_bHasTarget)
+    {
+      const plVec2 vTarget = toMap(pSquad->m_vTarget.GetAsVec2());
+      const plVec2 triangle[3] = {plVec2(vTarget.x, vTarget.y - 9.0f), plVec2(vTarget.x + 8.0f, vTarget.y + 6.0f), plVec2(vTarget.x - 8.0f, vTarget.y + 6.0f)};
+      w.Triangles(plArrayPtr<const plVec2>(triangle, 3), Foreground());
+      w.Text(plRectFloat(vTarget.x + 10.0f, vTarget.y - 7.0f, 100.0f, 14.0f), "Enemy", Foreground(), FontSize - 2);
+    }
+
+    // the members, with the spot an order's region gives each
+    const plAiSquadOrder slots = MakeSlotOrder(*pSquad);
+    const plUInt32 uiMembers = pSquad->m_Members.GetCount();
+
+    for (plUInt32 i = 0; i < uiMembers; ++i)
+    {
+      const plAiDebugFrame::SquadMember& member = pSquad->m_Members[i];
+      const plVec2 vMember = toMap(member.m_vPosition.GetAsVec2());
+
+      if (pSquad->m_bHasOrder && pSquad->m_bOrderRegion)
+      {
+        const plVec2 vSlot = toMap(slots.GetRegionSlot(i, uiMembers));
+        if ((vSlot - vMember).GetLength() > 3.0f)
+          w.Line(vMember, vSlot, WithAlpha(rose, 128), 1.0f, 3.0f, 3.0f);
+      }
+
+      const bool bToken = member.m_bAttackToken || member.m_bMoveToken;
+      w.Circle(vMember, 7.0f, rose, bToken ? Accent() : Field(), 2.0f);
+
+      plStringBuilder sName(member.m_sName);
+      if (sName.IsEmpty())
+        sName.SetFormat("#{}", i + 1);
+
+      w.Text(plRectFloat(vMember.x + 10.0f, vMember.y - 17.0f, 120.0f, 14.0f), sName, Mix(rose, Foreground(), 0.5f), FontSize - 2);
+    }
+  }
+
+  w.PopClip();
+  w.RectOutline(local, Line(), 1.0f);
+  Publish(GetBoard(), w, m_sSquadMapEntry);
+}
+
+void plAiDebuggerView::BuildSquad(plUiElement* pPane, const plRectFloat& rect)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  const plAiDebugFrame& frame = m_pSession->GetFrame();
+  const plAiDebugFrame::Squad* pSquad = FindSquad();
+
+  const float fWidth = rect.width;
+  const float fHeight = rect.height;
+
+  // the pane's own area below the tab row; this function gets its place on the surface
+  auto* pArea = Panel(pPane);
+  Place(pArea, plRectFloat(0.0f, s_fTabHeight, fWidth, fHeight));
+  pArea->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+  if (pSquad == nullptr)
+  {
+    auto* pEmpty = EmptyState(pArea, Icon::Group, "No squads", "Agents that share a Squad Id form a squad. Orders go to a squad: hold a spot, advance, engage or retreat, for a time.");
+    Place(pEmpty, plRectFloat(0.0f, 0.0f, fWidth, fHeight));
+    m_SquadMapRect = plRectFloat(0, 0, 0, 0);
+    return;
+  }
+
+  m_sSquad = pSquad->m_sId;
+
+  // ---- the toolbar: squad, order, expiry, flags and the buttons ----
+  plAiFlowLayout layout(8.0f, 4.0f, fWidth - 8.0f, 30.0f, 6.0f);
+
+  const auto iconButton = [&](const plRectFloat& r, plStringView sName, plStringView sLabel, plEditorUi::Icon icon, plStringView sTooltip, Action action, bool bEnabled)
+  {
+    plUiButton* pButton = AddTextButton(pArea, r, sName, sLabel, sTooltip, std::move(action), false, bEnabled);
+
+    auto* pText = static_cast<plUiText*>(pButton->m_Children[0]);
+    pText->m_HAlign = plUiTextHAlign::Left;
+    pText->m_vOffsets.x = 28.0f;
+
+    plUiImage* pIcon = SvgImage(pButton, IconPath(icon));
+    pIcon->m_vAnchorMin = pIcon->m_vAnchorMax = plVec2(0, 0.5f);
+    pIcon->m_vOffsets = plVec4(9, -7, 14, 14);
+    pIcon->m_Color = bEnabled ? Muted() : Dim();
+  };
+
+  // squad
+  {
+    plStringBuilder sSquad;
+    sSquad.SetFormat("{} ({})", pSquad->m_sId, pSquad->m_Members.GetCount());
+
+    layout.Group(layout.GetWidth({TextWidth("Squad", FontSize - 2), 150.0f}));
+    const plRectFloat label = layout.Take(TextWidth("Squad", FontSize - 2) + 4.0f, 20.0f);
+    Label(pArea, label, "Squad", Muted(), FontSize - 2);
+
+    AddDropdown(pArea, layout.Take(150.0f), "Dbg.Squad.Pick", sSquad, "The squad the tab shows and orders.", [this]()
+      {
+      plEditorUiMenu menu;
+      const plAiDebugFrame& current = m_pSession->GetFrame();
+
+      for (plUInt32 i = 0; i < current.m_Squads.GetCount(); ++i)
+      {
+        plStringBuilder sItem;
+        sItem.SetFormat("{} ({})", current.m_Squads[i].m_sId, current.m_Squads[i].m_Members.GetCount());
+
+        plEditorUiMenuItem& item = menu.AddAction(sItem, i);
+        item.m_bCheckable = true;
+        item.m_bChecked = current.m_Squads[i].m_sId == m_sSquad;
+      }
+
+      ShowMenu("Dbg.Squad.Pick", menu, [this](plUInt32 uiId)
+        {
+        const plAiDebugFrame& after = m_pSession->GetFrame();
+        if (uiId < after.m_Squads.GetCount())
+        {
+          m_sSquad = after.m_Squads[uiId].m_sId;
+          m_bSquadDraft = false;
+          Invalidate();
+        } }); });
+  }
+
+  // order
+  {
+    const plUInt8 uiOrders[] = {plAiSquadIntent::Hold, plAiSquadIntent::Advance, plAiSquadIntent::Engage, plAiSquadIntent::Retreat};
+    float fOrders = 4.0f * 3.0f;
+    for (const plUInt8 uiOrder : uiOrders)
+      fOrders += ChipWidth(SquadIntentName(uiOrder), false);
+
+    layout.Group(TextWidth("Order", FontSize - 2) + 4.0f + fOrders);
+    Label(pArea, layout.Take(TextWidth("Order", FontSize - 2) + 4.0f, 20.0f), "Order", Muted(), FontSize - 2);
+
+    for (const plUInt8 uiOrder : uiOrders)
+    {
+      const plRectFloat chip = layout.Take(ChipWidth(SquadIntentName(uiOrder), false) + 3.0f, 22.0f);
+      AddChip(pArea, chip, Name("Dbg.Squad.Order.", uiOrder), SquadIntentName(uiOrder), m_uiSquadIntent == uiOrder, plColorGammaUB(0, 0, 0, 0), "What the squad does while the order lasts.", [this, uiOrder]()
+        {
+        m_uiSquadIntent = uiOrder;
+        Invalidate(); });
+    }
+  }
+
+  // expiry
+  {
+    plStringBuilder sSeconds;
+    sSeconds.SetFormat("{} s", plArgF(m_fSquadSeconds, 0));
+
+    layout.Group(TextWidth("Expiry", FontSize - 2) + 4.0f + 90.0f + 40.0f);
+    Label(pArea, layout.Take(TextWidth("Expiry", FontSize - 2) + 4.0f, 20.0f), "Expiry", Muted(), FontSize - 2);
+    AddSlider(pArea, layout.Take(90.0f, 22.0f), "Dbg.Squad.Expiry", 5.0f, 60.0f, m_fSquadSeconds, "How long the order lasts, 5 to 60 seconds.", [this](float fValue)
+      {
+      m_fSquadSeconds = plMath::Round(fValue);
+      Invalidate(); });
+    Label(pArea, layout.Take(40.0f, 20.0f), sSeconds, Foreground(), FontSize - 2, true);
+  }
+
+  // no retreat
+  {
+    const float fNoRetreat = ChipWidth("No retreat", false);
+    AddChip(pArea, layout.Take(fNoRetreat, 22.0f), "Dbg.Squad.NoRetreat", "No retreat", m_bSquadNoRetreat, plColorGammaUB(0, 0, 0, 0), "Losses don't break the order: the squad stays at its task instead of retreating.", [this]()
+      {
+      m_bSquadNoRetreat = !m_bSquadNoRetreat;
+      Invalidate(); });
+  }
+
+  // what the map shows: the squad, or the whole world
+  {
+    const float fSquadChip = ChipWidth("Squad", false);
+    const float fWorldChip = ChipWidth("World", false);
+    const float fViewLabel = TextWidth("View", FontSize - 2) + 4.0f;
+
+    layout.Group(fViewLabel + fSquadChip + fWorldChip + 6.0f);
+    Label(pArea, layout.Take(fViewLabel, 20.0f), "View", Muted(), FontSize - 2);
+
+    AddChip(pArea, layout.Take(fSquadChip + 3.0f, 22.0f), "Dbg.Squad.ViewSquad", "Squad", !m_bSquadWorld, plColorGammaUB(0, 0, 0, 0), "Fits the map to the squad, its order and its target.", [this]()
+      {
+      m_bSquadWorld = false;
+      Invalidate(); });
+
+    AddChip(pArea, layout.Take(fWorldChip + 3.0f, 22.0f), "Dbg.Squad.ViewWorld", "World", m_bSquadWorld, plColorGammaUB(0, 0, 0, 0), "Fits the map to the whole navmesh and every agent, to see where the squad is in the level.", [this]()
+      {
+      m_bSquadWorld = true;
+      Invalidate(); });
+  }
+
+  // issue and cancel
+  {
+    const float fIssue = TextWidth("Issue") + 42.0f;
+    const float fCancel = TextWidth("Cancel") + 42.0f;
+    layout.Group(fIssue + fCancel + 6.0f);
+
+    iconButton(layout.Take(fIssue), "Dbg.Squad.Issue", "Issue", Icon::Check, "Gives the squad this order. Draw a region on the map first to have it hold or take a place.", [this]() { IssueSquadDraft(); }, true);
+    iconButton(layout.Take(fCancel), "Dbg.Squad.Cancel", "Cancel", Icon::WindowClose, "Ends the squad's order; it goes back to its own intent.", [this, sSquad = pSquad->m_sId]()
+      {
+      m_pSession->CancelSquadOrder(sSquad);
+      Invalidate(); }, pSquad->m_bHasOrder);
+  }
+
+  const float fBar = layout.GetBottom() + 6.0f;
+
+  auto* pBarEdge = Panel(pArea);
+  Place(pBarEdge, plRectFloat(0.0f, fBar - 1.0f, fWidth, 1.0f));
+  pBarEdge->m_Color = Line();
+
+  // ---- the map, left; what the squad decided, right ----
+  const float fMapWidth = plMath::Clamp(fWidth * 0.56f, 220.0f, plMath::Max(fWidth - 260.0f, 220.0f));
+  const float fMapHeight = plMath::Max(fHeight - s_fTabHeight - fBar, 40.0f);
+
+  m_SquadMapRect = plRectFloat(rect.x, rect.y + s_fTabHeight + fBar, fMapWidth, fMapHeight);
+
+  // the world rectangle that shows: everything the squad has, with room around it
+  {
+    plVec2 vMin = pSquad->m_vHome.GetAsVec2();
+    plVec2 vMax = vMin;
+
+    auto include = [&](const plVec2& v)
+    {
+      vMin = plVec2(plMath::Min(vMin.x, v.x), plMath::Min(vMin.y, v.y));
+      vMax = plVec2(plMath::Max(vMax.x, v.x), plMath::Max(vMax.y, v.y));
+    };
+
+    for (const plAiDebugFrame::SquadMember& member : pSquad->m_Members)
+      include(member.m_vPosition.GetAsVec2());
+
+    if (pSquad->m_bHasTarget)
+      include(pSquad->m_vTarget.GetAsVec2());
+
+    if (pSquad->m_bHasOrder && pSquad->m_bOrderRegion)
+    {
+      include(pSquad->m_vRegionMin);
+      include(pSquad->m_vRegionMax);
+    }
+
+    if (m_bSquadDraft)
+    {
+      include(m_vSquadDraftMin);
+      include(m_vSquadDraftMax);
+    }
+
+    // the world view: the navmesh's whole grid and every agent
+    if (m_bSquadWorld)
+    {
+      const plAiDebugFrame::Navmesh& nav = frame.m_Navmesh;
+
+      if (nav.m_bPresent && nav.m_fSectorSize > 0.0f)
+      {
+        const plVec2 vHalf(0.5f * nav.m_uiSectorsX * nav.m_fSectorSize, 0.5f * nav.m_uiSectorsY * nav.m_fSectorSize);
+        include(-vHalf);
+        include(vHalf);
+      }
+
+      for (const plAiDebugFrame::Agent& agent : frame.m_Agents)
+        include(agent.m_vPosition.GetAsVec2());
+    }
+
+    // a stable frame: at least 60 m, centered on what there is
+    const plVec2 vCenter = (vMin + vMax) * 0.5f;
+    const float fExtentX = plMath::Max(vMax.x - vMin.x + 24.0f, 60.0f);
+    const float fExtentY = plMath::Max(vMax.y - vMin.y + 24.0f, 60.0f * fMapHeight / plMath::Max(fMapWidth, 1.0f));
+
+    m_fSquadMapScale = plMath::Min(fMapWidth / fExtentX, fMapHeight / fExtentY);
+    m_vSquadMapMin = plVec2(vCenter.x - fMapWidth / m_fSquadMapScale * 0.5f, vCenter.y - fMapHeight / m_fSquadMapScale * 0.5f);
+  }
+
+  m_sSquadMapEntry = "Dbg.Squad.Map";
+  AddDrawList(pArea, plRectFloat(0.0f, fBar, fMapWidth, fMapHeight), m_sSquadMapEntry);
+  PublishSquadMap(pSquad);
+
+  auto* pDivider = Panel(pArea);
+  Place(pDivider, plRectFloat(fMapWidth, fBar, 1.0f, fMapHeight));
+  pDivider->m_Color = Line();
+
+  plUiScrollView* pBody = AddScrollBody(pArea, plRectFloat(fMapWidth + 1.0f, fBar, fWidth - fMapWidth - 1.0f, fMapHeight), "Dbg.SquadBody", 0.0f, 0.0f);
+  BuildSquadInfo(pBody, fWidth - fMapWidth - 1.0f - ScrollbarGutter, *pSquad);
+
+  PL_IGNORE_UNUSED(frame);
+}
+
+void plAiDebuggerView::BuildSquadInfo(plUiElement* pBody, float fWidth, const plAiDebugFrame::Squad& squad)
+{
+  using namespace plEditorUi;
+  using namespace plAiEngineUi;
+
+  // intent: the order's, or the squad's own
+  {
+    auto* pHeader = Section(pBody, "Intent", AiColor(), {}, {}, 130.0f);
+
+    plStringBuilder sIntent;
+    sIntent.SetFormat("{} \xC2\xB7 {}", squad.m_bHasOrder ? "Order" : "Automatic", SquadIntentName(squad.m_bHasOrder ? squad.m_uiOrderIntent : squad.m_uiIntent));
+
+    const float fBadge = BadgeWidth(sIntent);
+    Badge(pHeader, fWidth - fBadge - 12.0f, (SectionHeight - BadgeHeight) * 0.5f, sIntent, squad.m_bHasOrder ? Accent() : Dim());
+  }
+
+  plStringBuilder sSource, sExpires, sRetreat;
+
+  if (squad.m_bHasOrder)
+    sSource = squad.m_sOrderIssuer.IsEmpty() ? plString("code") : squad.m_sOrderIssuer;
+  else
+    sSource = "The squad's own reasoning";
+
+  if (squad.m_bHasOrder && squad.m_fOrderDuration > 0.0)
+    sExpires.SetFormat("{} s", plArgF(squad.m_fOrderRemaining, 1));
+  else
+    sExpires = squad.m_bHasOrder ? "until cancelled" : "-";
+
+  if (squad.m_bHasOrder && squad.m_bOrderNoRetreat)
+    sRetreat = "Blocked by the order";
+  else
+    sRetreat.SetFormat("Allowed \xC2\xB7 {} / {} losses", squad.m_uiLosses, squad.m_uiRetreatLosses);
+
+  const char* szRows[][2] = {{"Source", sSource.GetData()}, {"Expires", sExpires.GetData()}, {"Retreat", sRetreat.GetData()}};
+
+  for (const auto& row : szRows)
+  {
+    auto* pRow = Panel(pBody);
+    pRow->m_vOffsets.w = 22.0f;
+    pRow->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+    Label(pRow, plRectFloat(12.0f, 0.0f, 90.0f, 22.0f), row[0], Muted(), FontSize - 2);
+    Label(pRow, plRectFloat(102.0f, 0.0f, fWidth - 114.0f, 22.0f), row[1], Foreground(), FontSize - 2, true);
+  }
+
+  // members
+  {
+    plStringBuilder sCount;
+    sCount.SetFormat("{} alive \xC2\xB7 peak {}", squad.m_Members.GetCount(), squad.m_uiPeak);
+    Section(pBody, "Members", AiColor(), sCount);
+
+    const float fRole = 112.0f;
+    const float fToken = 66.0f;
+    const float xRole = fWidth - fRole - fToken - 12.0f;
+    const float xToken = fWidth - fToken - 12.0f;
+
+    auto* pHeader = Panel(pBody);
+    pHeader->m_vOffsets.w = 20.0f;
+    pHeader->m_Color = plColorGammaUB(0, 0, 0, 0);
+    Label(pHeader, plRectFloat(12.0f, 2.0f, xRole - 12.0f, 16.0f), "MEMBER", Dim(), MinFontSize);
+    Label(pHeader, plRectFloat(xRole, 2.0f, fRole, 16.0f), "ROLE", Dim(), MinFontSize);
+    Label(pHeader, plRectFloat(xToken, 2.0f, fToken, 16.0f), "TOKEN", Dim(), MinFontSize);
+
+    const plAiSquadOrder slots = MakeSlotOrder(squad);
+
+    for (plUInt32 i = 0; i < squad.m_Members.GetCount() && i < 8; ++i)
+    {
+      const plAiDebugFrame::SquadMember& member = squad.m_Members[i];
+
+      auto* pRow = Panel(pBody);
+      pRow->m_vOffsets.w = 22.0f;
+      pRow->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+      plStringBuilder sName(member.m_sName);
+      if (sName.IsEmpty())
+        sName.SetFormat("#{}", i + 1);
+
+      const plUInt8 uiIntent = squad.m_bHasOrder ? squad.m_uiOrderIntent : squad.m_uiIntent;
+      Label(pRow, plRectFloat(12.0f, 0.0f, xRole - 16.0f, 22.0f), sName, Foreground(), FontSize - 2);
+      Label(pRow, plRectFloat(xRole, 0.0f, fRole, 22.0f), SquadRole(uiIntent, member.m_bMoveToken), Muted(), FontSize - 2);
+
+      if (member.m_bAttackToken)
+        Badge(pRow, xToken, 3.0f, "attack", Accent());
+      else if (member.m_bMoveToken)
+        Badge(pRow, xToken, 3.0f, "move", Accent());
+    }
+  }
+
+  // history
+  {
+    Section(pBody, "History", AiColor());
+
+    if (squad.m_History.IsEmpty())
+    {
+      auto* pEmpty = Panel(pBody);
+      pEmpty->m_vOffsets.w = 24.0f;
+      pEmpty->m_Color = plColorGammaUB(0, 0, 0, 0);
+      Label(pEmpty, plRectFloat(12.0f, 0.0f, fWidth - 24.0f, 24.0f), "No intent changes yet.", Dim(), FontSize - 2);
+    }
+
+    for (plUInt32 i = 0; i < squad.m_History.GetCount() && i < 8; ++i)
+    {
+      const plAiDebugFrame::SquadHistory& entry = squad.m_History[i];
+
+      auto* pRow = Panel(pBody);
+      pRow->m_vOffsets.w = 22.0f;
+      pRow->m_Color = plColorGammaUB(0, 0, 0, 0);
+
+      plStringBuilder sTime;
+      sTime.SetFormat("{} s", plArgF(entry.m_fTime, 1));
+      Label(pRow, plRectFloat(12.0f, 0.0f, 56.0f, 22.0f), sTime, Dim(), FontSize - 2, true);
+      Label(pRow, plRectFloat(72.0f, 0.0f, fWidth - 84.0f, 22.0f), entry.m_sText, Foreground(), FontSize - 2);
+    }
   }
 }
 
@@ -1420,6 +2603,48 @@ void plAiDebuggerView::ScrubTo(float x)
 void plAiDebuggerView::OnViewPointer(const plEditorUiPointerEvent& e)
 {
   using Type = plEditorUiPointerEvent::Type;
+
+  // the Squad tab's map: dragging draws the region of the next order
+  if (m_Tab == Tab::Squad)
+  {
+    if (e.m_Type == Type::Press && e.m_Button == plEditorUiPointerEvent::Button::Left && m_SquadMapRect.width > 0.0f && m_SquadMapRect.Contains(e.m_vPosition))
+    {
+      const plAiDebugFrame::Squad* pSquad = FindSquad();
+
+      if (pSquad != nullptr && !pSquad->m_bHasOrder)
+      {
+        m_bSquadDragging = true;
+        m_vSquadDragStart = SquadMapToWorld(e.m_vPosition);
+        m_vSquadDraftMin = m_vSquadDragStart;
+        m_vSquadDraftMax = m_vSquadDragStart + plVec2(2.0f);
+        m_bSquadDraft = true;
+        PublishSquadMap(pSquad);
+        return;
+      }
+    }
+
+    if (m_bSquadDragging)
+    {
+      if (e.m_Type == Type::DragStart || e.m_Type == Type::DragMove || e.m_Type == Type::Move)
+      {
+        const plVec2 vNow = SquadMapToWorld(e.m_vPosition);
+        m_vSquadDraftMin = plVec2(plMath::Min(vNow.x, m_vSquadDragStart.x), plMath::Min(vNow.y, m_vSquadDragStart.y));
+        m_vSquadDraftMax = plVec2(plMath::Max(vNow.x, m_vSquadDragStart.x), plMath::Max(vNow.y, m_vSquadDragStart.y));
+        m_vSquadDraftMax = plVec2(plMath::Max(m_vSquadDraftMax.x, m_vSquadDraftMin.x + 2.0f), plMath::Max(m_vSquadDraftMax.y, m_vSquadDraftMin.y + 2.0f));
+
+        // straight to the map: the document rebuilds only after the button is released
+        PublishSquadMap(FindSquad());
+        return;
+      }
+
+      if (e.m_Type == Type::Release || e.m_Type == Type::Drop || e.m_Type == Type::DragCancel)
+      {
+        m_bSquadDragging = false;
+        Invalidate();
+        return;
+      }
+    }
+  }
 
   if (e.m_Type == Type::Press && e.m_Button == plEditorUiPointerEvent::Button::Left)
   {

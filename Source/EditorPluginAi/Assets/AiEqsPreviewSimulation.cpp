@@ -159,6 +159,11 @@ namespace plAiEqsUi
       const char* szCombine = pLos->m_Combine == plAiEqsContextCombine::Max ? "Max" : (pLos->m_Combine == plAiEqsContextCombine::Average ? "Average" : "Min");
       out_sSummary.SetFormat("prefer {} \xC2\xB7 eye heights {} / {} \xC2\xB7 combine: {}", pLos->m_bPreferVisible ? "VISIBLE" : "BLOCKED", plArgF(pLos->m_fItemEyeHeight, 2), plArgF(pLos->m_fContextEyeHeight, 2), szCombine);
     }
+    else if (auto pThreat = plDynamicCast<const plAiEqsTest_ThreatMap*>(pTest))
+    {
+      const char* szLayers[] = {"safety (no threat, no danger)", "threat", "visibility to known enemies", "danger areas"};
+      out_sSummary.SetFormat("team threat map \xC2\xB7 {}", szLayers[pThreat->m_Layer.GetValue()]);
+    }
     else if (plDynamicCast<const plAiEqsTest_ReachableApprox*>(pTest) != nullptr)
     {
       out_sSummary = "navmesh raycast from the querier \xC2\xB7 detour scores 0.25";
@@ -583,6 +588,11 @@ void plAiEqsPreviewSimulation::RunTests(const plAiEqsQueryAssetObject& props)
         const plVec2 vEye = ResolveContext(pLos->GetContext());
         const bool bBlocked = SegmentsIntersect(vEye, cand.m_vPosition, m_vOccluderA, m_vOccluderB);
         fRaw = (bBlocked != pLos->m_bPreferVisible) ? 1.0f : 0.0f;
+      }
+      else if (plDynamicCast<const plAiEqsTest_ThreatMap*>(pTest) != nullptr)
+      {
+        fRaw = 1.0f; // the preview has no team and no map: nothing is known, which is safe
+        item.m_TestData = plAiEqsTestData::MissingContext;
       }
       else if (plDynamicCast<const plAiEqsTest_ReachableApprox*>(pTest) != nullptr)
       {

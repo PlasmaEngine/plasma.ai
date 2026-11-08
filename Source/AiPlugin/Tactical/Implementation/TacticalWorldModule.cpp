@@ -4,6 +4,7 @@
 #include <AiPlugin/Tactical/Components/CoverPointComponent.h>
 #include <AiPlugin/Tactical/Implementation/CoverGeneration.h>
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/Tactical/ThreatWorldModule.h>
 #include <Core/Interfaces/PhysicsWorldModule.h>
 #include <Core/Utils/Blackboard.h>
 #include <Core/World/World.h>
@@ -135,9 +136,19 @@ plAiTacticalWorldModule::QueryID plAiTacticalWorldModule::SubmitQuery(const plAi
   slot.m_Desc.m_uiMaxResults = plMath::Min<plUInt8>(desc.m_uiMaxResults, 16);
   slot.m_pNavMesh = pNavMesh;
   slot.m_pFilter = &pNavMeshModule->GetPathSearchFilter(desc.m_sPathSearchConfig.GetView());
+  slot.m_pThreat = nullptr;
   slot.m_Result.m_TopN.Clear();
   slot.m_Result.m_uiFrameStamp = GetWorld()->GetUpdateCounter();
   slot.m_bInUse = true;
+
+  // the querier team's threat map as it is now; the worker reads this copy
+  if (!desc.m_sTeam.IsEmpty())
+  {
+    if (const auto* pThreatModule = GetWorld()->GetModuleReadOnly<plAiThreatWorldModule>())
+    {
+      slot.m_pThreat = pThreatModule->GetSnapshot(desc.m_sTeam);
+    }
+  }
 
   // side effect: requests missing sectors, so a retry shortly after will find them loaded
   const plVec2 vHalf(plMath::Max(desc.m_fRadiusMax, 1.0f));
@@ -154,6 +165,32 @@ plAiTacticalWorldModule::QueryID plAiTacticalWorldModule::SubmitQuery(const plAi
   }
 
   return MakeQueryID(uiSlot, slot.m_uiGeneration);
+}
+
+void plAiTacticalWorldModule::SetDebugWatched(plGameObjectHandle hClaimant)
+{
+  PL_LOCK(m_DebugMutex);
+
+  if (m_hDebugWatched == hClaimant)
+    return;
+
+  m_hDebugWatched = hClaimant;
+  m_DebugCandidates.Clear();
+  m_bHasDebugCandidates = false;
+}
+
+bool plAiTacticalWorldModule::GetDebugCandidates(plDynamicArray<plAiTacticalQueryResult::Candidate>& out_candidates, plTime& out_completedAt) const
+{
+  PL_LOCK(m_DebugMutex);
+
+  out_candidates.Clear();
+
+  if (!m_bHasDebugCandidates)
+    return false;
+
+  out_candidates.PushBackRange(m_DebugCandidates.GetArrayPtr());
+  out_completedAt = m_DebugCandidateTime;
+  return true;
 }
 
 const plAiTacticalWorldModule::QuerySlot* plAiTacticalWorldModule::GetSlotChecked(QueryID id) const
@@ -1402,6 +1439,23 @@ void plAiTacticalWorldModule::ReleaseClaim(plGameObjectHandle hClaimant)
   if (m_ClaimByOwner.TryGetValue(hClaimant, uiClaim))
   {
     ReleaseClaimAtIndex(uiClaim);
+  }
+}
+
+void plAiTacticalWorldModule::GetClaimedCovers(plDynamicArray<ClaimedCover>& out_claims) const
+{
+  out_claims.Clear();
+
+  for (const Claim& claim : m_Claims)
+  {
+    plAiCoverPoint point;
+
+    if (!claim.m_bInUse || !ResolveCover(claim.m_hPoint, point))
+      continue;
+
+    ClaimedCover& out = out_claims.ExpandAndGetRef();
+    out.m_hClaimant = claim.m_hClaimant;
+    out.m_vPosition = point.m_vPosition;
   }
 }
 

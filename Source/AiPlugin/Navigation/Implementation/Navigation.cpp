@@ -56,6 +56,9 @@ void plAiNavigation::Update()
   {
     m_uiReinitQueryBit = 0;
     m_Query.init(m_pNavmesh->GetDetourNavMesh(), MaxSearchNodes);
+
+    ResetPathContinuation();
+    m_pContinueQuery.Clear();
   }
 
   if (!UpdatePathSearch())
@@ -224,10 +227,143 @@ void plAiNavigation::Update()
     m_uiOptimizeTopologyCounter = 0;
     m_PathCorridor.optimizePathTopology(&m_Query, m_pFilter);
   }
+
+  UpdatePathContinuation();
+}
+
+void plAiNavigation::ResetPathContinuation()
+{
+  m_bPathContinues = false;
+  m_bContinueSearching = false;
+}
+
+void plAiNavigation::UpdatePathContinuation()
+{
+  if (!m_bPathContinues || (m_State != State::FullPathFound && m_State != State::PartialPathFound))
+    return;
+
+  if (!m_bContinueSearching)
+  {
+    if (m_PathCorridor.getPathCount() > ContinueAtPathNodes)
+      return;
+
+    const dtPolyRef endPoly = m_PathCorridor.getLastPoly();
+
+    plRcPos startPos;
+    if (dtStatusFailed(m_Query.closestPointOnPoly(endPoly, plRcPos(m_vPathSearchTargetPos), startPos, nullptr)))
+    {
+      CancelNavigation();
+      m_State = State::StartNewSearch;
+      return;
+    }
+
+    // the sectors between the corridor end and the target have to be there before the search can pass them
+    plRectFloat r = plRectFloat::MakeInvalid();
+    r.ExpandToInclude(plVec3(startPos).GetAsVec2());
+    r.ExpandToInclude(m_vPathSearchTargetPos.GetAsVec2());
+    r.Grow(c_fPathSearchBoundary);
+
+    if (!m_pNavmesh->RequestSector(r.GetCenter(), r.GetHalfExtents()))
+      return;
+
+    if (m_pContinueQuery == nullptr)
+    {
+      m_pContinueQuery = PL_DEFAULT_NEW(dtNavMeshQuery);
+      m_pContinueQuery->init(m_pNavmesh->GetDetourNavMesh(), MaxSearchNodes);
+    }
+
+    if (dtStatusFailed(m_pContinueQuery->initSlicedFindPath(endPoly, m_PathSearchTargetPoly, startPos, plRcPos(m_vPathSearchTargetPos), m_pFilter)))
+    {
+      CancelNavigation();
+      m_State = State::StartNewSearch;
+      return;
+    }
+
+    m_bContinueSearching = true;
+    return;
+  }
+
+  int iIterationsDone = 0;
+  const dtStatus searchStatus = m_pContinueQuery->updateSlicedFindPath(32, &iIterationsDone);
+
+  if (dtStatusInProgress(searchStatus))
+    return;
+
+  m_bContinueSearching = false;
+
+  plInt32 iTailLength = 0;
+  dtPolyRef tailPolys[MaxPathNodes];
+  dtStatus finalizeStatus = DT_FAILURE;
+
+  if (dtStatusSucceed(searchStatus))
+  {
+    finalizeStatus = m_pContinueQuery->finalizeSlicedFindPath(tailPolys, &iTailLength, (int)MaxPathNodes);
+  }
+
+  if (dtStatusFailed(finalizeStatus) || iTailLength < 1)
+  {
+    // the way ahead is gone, so search again from where the agent is
+    CancelNavigation();
+    m_State = State::StartNewSearch;
+    return;
+  }
+
+  const int iCorridorLength = m_PathCorridor.getPathCount();
+  const dtPolyRef* pCorridor = m_PathCorridor.getPath();
+
+  if (iCorridorLength == 0 || pCorridor[iCorridorLength - 1] != tailPolys[0])
+  {
+    // the end of the corridor moved while searching, so the result doesn't attach to it; try again
+    return;
+  }
+
+  dtPolyRef mergedPolys[MaxPathNodes];
+  int iMergedLength = 0;
+
+  for (int i = 0; i < iCorridorLength; ++i)
+  {
+    mergedPolys[iMergedLength++] = pCorridor[i];
+  }
+
+  int iTailUsed = 1; // tailPolys[0] is the last corridor polygon
+  while (iTailUsed < iTailLength && iMergedLength < (int)MaxPathNodes)
+  {
+    mergedPolys[iMergedLength++] = tailPolys[iTailUsed++];
+  }
+
+  const bool bTailCut = iTailUsed < iTailLength;
+  const bool bReachedTarget = !bTailCut && tailPolys[iTailLength - 1] == m_PathSearchTargetPoly;
+  const bool bProgress = iMergedLength > iCorridorLength;
+
+  m_PathCorridor.setCorridor(m_PathCorridor.getTarget(), mergedPolys, (plUInt32)iMergedLength);
+
+  if (!m_PathCorridor.isValid(MaxPathNodes, &m_Query, m_pFilter))
+  {
+    CancelNavigation();
+    m_State = State::StartNewSearch;
+    return;
+  }
+
+  if (bReachedTarget)
+  {
+    m_bPathContinues = false;
+    return;
+  }
+
+  const bool bBufferCut = bTailCut || (finalizeStatus & DT_BUFFER_TOO_SMALL) != 0;
+  const bool bOutOfNodes = (finalizeStatus & DT_PARTIAL_RESULT) != 0 && (finalizeStatus & DT_OUT_OF_NODES) != 0;
+
+  if (!bProgress || (!bBufferCut && !bOutOfNodes))
+  {
+    // what is left of the way leads nowhere nearer: the target can't be reached, walk to the closest point
+    m_bPathContinues = false;
+    m_State = State::PartialPathFound;
+  }
 }
 
 void plAiNavigation::CancelNavigation()
 {
+  ResetPathContinuation();
   m_PathCorridor.clear();
   m_uiTargetPositionChangedBit = 0; // don't start another path search
   m_State = State::Idle;
@@ -272,6 +408,10 @@ void plAiNavigation::SetCurrentPosition(const plVec3& vPosition)
 
 void plAiNavigation::SetTargetPosition(const plVec3& vPosition)
 {
+  // a cut corridor can't take a moved target, it searches again; behaviors that repeat the same destination must not restart it
+  if (m_bPathContinues && m_vTargetPosition == vPosition)
+    return;
+
   m_vTargetPosition = vPosition;
   m_uiTargetPositionChangedBit = 1;
 }
@@ -401,7 +541,9 @@ bool plAiNavigation::UpdatePathSearch()
     plInt32 iPathCorridorLength = 0;
     dtPolyRef resultPolys[MaxPathNodes];
 
-    if (dtStatusFailed(m_Query.finalizeSlicedFindPath(resultPolys, &iPathCorridorLength, (int)MaxPathNodes)))
+    const dtStatus finalizeStatus = m_Query.finalizeSlicedFindPath(resultPolys, &iPathCorridorLength, (int)MaxPathNodes);
+
+    if (dtStatusFailed(finalizeStatus))
     {
       SetNoPathFound();
       return false;
@@ -410,14 +552,23 @@ bool plAiNavigation::UpdatePathSearch()
     // reduce to actual length
     PL_ASSERT_DEV(iPathCorridorLength >= 1, "Expected path corridor to have at least length 1");
 
-    if (resultPolys[iPathCorridorLength - 1] != m_PathSearchTargetPoly)
+    ResetPathContinuation();
+
+    if (resultPolys[iPathCorridorLength - 1] == m_PathSearchTargetPoly)
     {
-      // if this is the case, the target position cannot be reached, but we can walk close to it
-      m_State = State::PartialPathFound;
+      m_State = State::FullPathFound;
+    }
+    else if ((finalizeStatus & DT_BUFFER_TOO_SMALL) != 0 || ((finalizeStatus & DT_PARTIAL_RESULT) != 0 && (finalizeStatus & DT_OUT_OF_NODES) != 0))
+    {
+      // the path is longer than the corridor, or the search ran out of nodes on the way: the corridor ends at the best point
+      // the search got to, and is extended from there while the agent walks (see UpdatePathContinuation())
+      m_bPathContinues = true;
+      m_State = State::FullPathFound;
     }
     else
     {
-      m_State = State::FullPathFound;
+      // if this is the case, the target position cannot be reached, but we can walk close to it
+      m_State = State::PartialPathFound;
     }
 
     // the target position here may already differ from the target position when the search was started

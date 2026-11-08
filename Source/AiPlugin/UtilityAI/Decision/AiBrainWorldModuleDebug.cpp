@@ -133,6 +133,38 @@ void plAiBrainWorldModule::GetAgentSummaries(plDynamicArray<plAiAgentDebugSummar
   }
 }
 
+void plAiBrainWorldModule::GatherThreatInfo(plDynamicArray<ThreatAgent>& out_agents, plDynamicArray<ThreatSource>& out_sources) const
+{
+  out_agents.Clear();
+  out_sources.Clear();
+
+  for (plUInt32 uiSlot : m_ActiveAgents)
+  {
+    const Agent& agent = m_Agents[uiSlot];
+
+    const plAiAgentComponent* pComponent = nullptr;
+    if (!agent.m_bConfigured || !GetWorld()->TryGetComponent(agent.m_hComponent, pComponent))
+      continue;
+
+    ThreatAgent& threatAgent = out_agents.ExpandAndGetRef();
+    threatAgent.m_hOwner = pComponent->GetOwner()->GetHandle();
+    threatAgent.m_sTeam = agent.m_sTeam;
+    threatAgent.m_uiSlot = uiSlot;
+
+    for (const plAiPerceivedTarget& target : agent.m_Targets)
+    {
+      if (target.m_fConfidence <= 0.0f)
+        continue;
+
+      ThreatSource& source = out_sources.ExpandAndGetRef();
+      source.m_sTeam = agent.m_sTeam;
+      source.m_hTarget = target.m_hTarget;
+      source.m_vPosition = target.m_vLastKnownPosition;
+      source.m_fConfidence = target.m_fConfidence;
+    }
+  }
+}
+
 void plAiBrainWorldModule::DrawAgentDebugInfo(Agent& ref_agent, plAiAgentComponent& ref_component, plTime now)
 {
   const plVec3 vOwnerPosition = ref_component.GetOwner()->GetGlobalPosition();

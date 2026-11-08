@@ -123,6 +123,37 @@ public:
   /// \brief Schedules a decision for the agent in the given slot as soon as its wake spacing allows.
   void RequestDecision(plUInt32 uiSlot, plBitflags<plAiWakeReason> reason);
 
+  /// \name Threat map feed
+  ///@{
+
+  /// \brief An agent, as the threat map sees it: whose blackboard to fill, and which team's map to read.
+  struct ThreatAgent
+  {
+    plGameObjectHandle m_hOwner;
+    plHashedString m_sTeam;
+    plUInt32 m_uiSlot = plInvalidIndex;
+  };
+
+  /// \brief What an agent knows about an enemy: the position it remembers and how sure it is.
+  struct ThreatSource
+  {
+    plHashedString m_sTeam; ///< the team of the agent that perceives the enemy
+    plGameObjectHandle m_hTarget;
+    plVec3 m_vPosition = plVec3::MakeZero();
+    float m_fConfidence = 0.0f;
+  };
+
+  /// \brief Every configured agent, and every target an agent remembers. Main thread only.
+  void GatherThreatInfo(plDynamicArray<ThreatAgent>& out_agents, plDynamicArray<ThreatSource>& out_sources) const;
+
+  /// \brief Ends the active behavior of the agent in the slot, even while it is locked, and schedules a new decision.
+  ///
+  /// The behavior that wins again starts from the beginning. Used when the situation under a behavior changed (its
+  /// cover is in a danger area).
+  void InterruptBehavior(plUInt32 uiSlot);
+
+  ///@}
+
 private:
   friend class plAiAgentComponent;
 

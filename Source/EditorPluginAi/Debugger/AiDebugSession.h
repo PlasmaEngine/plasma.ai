@@ -64,6 +64,39 @@ public:
   /// Sets plAiDebugWatchedOnlyCVar in the engine process.
   void SetWatchedOnly(bool bOn);
 
+  /// Sets an int cvar in the engine process.
+  void SetIntCVar(const char* szName, plInt32 iValue);
+
+  /// \name Squad orders
+  ///@{
+
+  /// Orders a squad with the next poll. A region of zero size means no region; zero seconds last until cancelled.
+  void IssueSquadOrder(plStringView sSquad, plUInt8 uiIntent, bool bRegion, const plVec2& vRegionMin, const plVec2& vRegionMax, float fSeconds, bool bNoRetreat);
+
+  /// Ends a squad's order with the next poll.
+  void CancelSquadOrder(plStringView sSquad);
+
+  ///@}
+
+  /// \name Navmesh sectors (the sector views)
+  ///@{
+
+  /// The navmesh sector the sector views outline and the Navigation tab describes: the one picked, else the one under
+  /// the watched agent, else the first failed or busy one. x < 0 when there is none.
+  plVec2I32 GetInspectedSector() const;
+
+  /// Picks a sector; (-1, -1) goes back to following the watched agent.
+  void PickSector(const plVec2I32& vCoord) { m_vPickedSector = vCoord; }
+  bool IsSectorPicked() const { return m_vPickedSector.x >= 0; }
+
+  /// Rebuilds the inspected sector with the next poll.
+  void RebuildInspectedSector();
+
+  /// The sector a world position lies in, from the navmesh grid of the latest frame; x < 0 without a navmesh.
+  plVec2I32 GetSectorAt(const plVec3& vPosition) const;
+
+  ///@}
+
   /// Increases with every received frame.
   plUInt32 GetFrameCounter() const { return m_uiFrameCounter; }
 
@@ -131,6 +164,9 @@ private:
   plUuid m_Watched;
   plUuid m_PickObject; ///< sent with the next poll only
   bool m_bCaptureEqs = false;
+  plVec2I32 m_vPickedSector = plVec2I32(-1, -1);
+  bool m_bRebuildSector = false; ///< sent with the next poll only
+  plAiDebugRequest::OrderCommand m_PendingOrder; ///< sent with the next poll only
 
   plUInt32 m_uiRequestId = 0;
   plTime m_LastPoll;

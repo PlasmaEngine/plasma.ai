@@ -251,6 +251,46 @@ namespace
     Check(pDirector->IsFinished(), "E: the encounter finishes when every wave is cleared");
   }
 
+  void TestWaveGivesOrder()
+  {
+    plAiTestWorld world("AiTest A3 wave order");
+
+    plGameObjectHandle hDirector, hWave;
+    CreateDirector(world, hDirector);
+    plAiEncounterWaveComponent* pWave = CreateWave(world, hDirector, "Bridge", plAiEncounterTrigger::EncounterStart, hWave);
+
+    {
+      PL_LOCK(world.GetWorld().GetWriteMarker());
+
+      plGameObject* pObject = nullptr;
+      world.GetWorld().TryGetObject(hWave, pObject);
+      pObject->SetLocalPosition(plVec3(10, 5, 0));
+
+      pWave->m_OrderIntent = plAiSquadIntent::Hold;
+      pWave->m_fOrderDuration = 30.0f;
+      pWave->m_fOrderRadius = 8.0f;
+      pWave->m_bOrderNoRetreat = true;
+    }
+
+    AddSpawner(world, hWave, "SquadBridge");
+
+    world.Step(20); // released, spawned, registered
+
+    plAiSquadOrder order;
+    plTime remaining;
+    bool bGot = false;
+
+    {
+      const plWorld& readWorld = world.GetWorld();
+      PL_LOCK(readWorld.GetReadMarker());
+      bGot = readWorld.GetModule<plAiSquadWorldModule>()->GetOrder(plTempHashedString("SquadBridge"), order, remaining);
+    }
+
+    Check(bGot && order.m_Intent == plAiSquadIntent::Hold, "A3: a wave with an order gives it to the squad it spawns");
+    Check(order.m_bHasRegion && order.m_vRegionMin.IsEqual(plVec2(2, -3), 0.01f) && order.m_vRegionMax.IsEqual(plVec2(18, 13), 0.01f), "A3: the order's region is a square around the wave's object");
+    Check(order.m_bNoRetreat && order.m_sIssuer == "Encounter: Bridge" && remaining.GetSeconds() > 28.0, "A3: the order names the wave, keeps its settings and counts from the release");
+  }
+
   void TestHoldWhileIntense()
   {
     plAiTestWorld world("AiTest E hold");
@@ -349,6 +389,7 @@ void RunEncounterTests()
   TestPacingCurve();
   TestIntensityParts();
   TestWavesReleaseAndClear();
+  TestWaveGivesOrder();
   TestHoldWhileIntense();
   TestCalmTrigger();
 }

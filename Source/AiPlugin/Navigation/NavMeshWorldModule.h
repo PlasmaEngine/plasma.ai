@@ -31,7 +31,7 @@ public:
 
   const plAiNavigationConfig& GetConfig() const { return m_Config; }
 
-  /// \name Nav blockers (runtime poly-flag patches, e.g. doors)
+  /// \name Nav blockers (runtime poly-flag patches, e.g. doors, and carved volumes)
   ///@{
 
   using BlockerID = plUInt32;
@@ -39,17 +39,23 @@ public:
 
   /// \brief Registers a world-space box that blocks (or releases) navmesh polygons at runtime.
   ///
-  /// Blockers don't change the navmesh shape - they toggle the 'Blocked' poly flag (mode Block)
-  /// or the avoid-zone area id (mode Avoid, high path cost instead of a hard block) on the polys
-  /// in the box. Registering (or moving) a blocker invalidates the overlapping sectors once, so
-  /// the build splits dedicated polygons out of the volume; from then on TOGGLING is instant
+  /// Modes Block and Avoid don't change the navmesh shape - they toggle the 'Blocked' poly flag
+  /// (Block) or the avoid-zone area id (Avoid, high path cost instead of a hard block) on the polys
+  /// in the box. Registering (or moving) such a blocker invalidates the overlapping sectors once,
+  /// so the build splits dedicated polygons out of the volume; from then on TOGGLING is instant
   /// (no rebuild). Rebuilt sectors are automatically re-stamped.
+  ///
+  /// Mode Carve cuts the box out of the walkable area while active, like solid geometry. Every
+  /// toggle or move rebuilds the overlapping sectors.
+  ///
+  /// The box is extended 0.5 m downwards, so it also covers a floor just below its bottom.
+  BlockerID RegisterNavBlocker(const plBoundingBox& worldBox, bool bActive, plEnum<plAiNavBlockerMode> mode);
   BlockerID RegisterNavBlocker(const plBoundingBox& worldBox, bool bActive, plEnum<plAiNavObstacleMode> mode);
   void SetNavBlockerActive(BlockerID id, bool bActive);
   void UpdateNavBlockerBounds(BlockerID id, const plBoundingBox& worldBox);
   void UnregisterNavBlocker(BlockerID id);
 
-  /// \brief Collects all registered blocker volumes (active or not) overlapping the given sector.
+  /// \brief Collects the Block and Avoid blocker volumes (active or not) overlapping the given sector.
   /// The build marks them with plAiNavMeshBlockerZoneAreaID to force a poly split.
   void CollectBlockerZonesForSector(const plAiNavMesh& navMesh, plAiNavMesh::SectorID sectorID, plDynamicArray<plBoundingBox>& out_boxes) const;
 
@@ -104,6 +110,21 @@ public:
 
   ///@}
 
+  /// \name Sector views (AI.Navmesh.VisualizeMode)
+  ///@{
+
+  /// \brief The navmesh the views draw: the one AI.Navmesh.Visualize names, the first one while only a sector view is on.
+  plAiNavMesh* GetVisualizedNavMesh();
+
+  /// \brief The sector the sector views outline and describe. The AI Debugger sets it; (-1, -1) is none.
+  void SetInspectedSector(plVec2I32 vCoord) { m_vInspectedSector = vCoord; }
+  plVec2I32 GetInspectedSector() const { return m_vInspectedSector; }
+
+  /// \brief The polygon count per sector that the density view and the near-limit warning treat as full (AI.Navmesh.SectorPolyBudget).
+  static plUInt32 GetSectorPolyBudget();
+
+  ///@}
+
   /// \name Obstacle carve volumes (dynamic physics objects)
   ///@{
 
@@ -122,6 +143,7 @@ public:
 
   /// \brief Collects all registered obstacle boxes overlapping the given sector (with a border
   /// margin), separated by mode: carve boxes (Block) and avoid zones (Avoid).
+  /// Active Carve-mode nav blockers are added to the carve boxes.
   void CollectObstacleCarvesForSector(const plAiNavMesh& navMesh, plAiNavMesh::SectorID sectorID, plDynamicArray<plBoundingBox>& out_carveBoxes, plDynamicArray<plBoundingBox>& out_avoidZones) const;
 
   ///@}
@@ -141,7 +163,7 @@ private:
   {
     plBoundingBox m_WorldBox;
     plBoundingBox m_ClearBox; ///< region to clear before re-stamping; covers old+new box after a move
-    plEnum<plAiNavObstacleMode> m_Mode;
+    plEnum<plAiNavBlockerMode> m_Mode;
     bool m_bInUse = false;
     bool m_bActive = false;
     bool m_bDirty = false;          ///< needs (re)application this frame
@@ -202,6 +224,11 @@ private:
   plMap<plString, dtQueryFilter> m_PathSearchFilters;
 
   float m_fAppliedAvoidZoneCost = -1.0f; ///< last avoid-zone cost pushed into the filters (cvar sync)
+
+  plVec2I32 m_vInspectedSector = plVec2I32(-1, -1);
+
+  /// Draws a sector view of the navmesh with its stats box, legend and the inspected sector's details.
+  void DrawSectorView(plAiNavMesh& ref_navMesh, plAiNavMeshVisualizeMode::Enum mode, plUInt32 uiMaxBuilds);
 
   // per-navmesh sectors finalized this frame; consumed by the tactical module (cover re-bakes)
   plMap<const plAiNavMesh*, plDynamicArray<plAiNavMesh::SectorID>> m_LastChangedSectors;

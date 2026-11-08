@@ -1,7 +1,12 @@
+#include <AiPlugin/Navigation/NavMesh.h>
+#include <AiPlugin/Navigation/NavMeshWorldModule.h>
+#include <AiPlugin/Tactical/Components/CoverPointComponent.h>
 #include <AiPlugin/Tactical/Components/SmartObjectComponent.h>
 #include <AiPlugin/Tactical/SmartObjects.h>
 #include <AiPlugin/Tactical/SquadTypes.h>
+#include <AiPlugin/Tactical/SquadWorldModule.h>
 #include <AiPlugin/Tactical/TacticalWorldModule.h>
+#include <AiPlugin/Tactical/ThreatWorldModule.h>
 #include <AiPlugin/UtilityAI/Components/AiAgentComponent.h>
 #include <AiPlugin/UtilityAI/Components/AiStimulusSourceComponent.h>
 #include <AiPlugin/UtilityAI/Decision/AiArchetypeResource.h>
@@ -15,8 +20,10 @@
 #include <AiPlugin/Utils/AiCVars.h>
 #include <Core/ResourceManager/ResourceManager.h>
 #include <Foundation/IO/MemoryStream.h>
+#include <Foundation/Threading/ThreadUtils.h>
 #include <GameEngine/Gameplay/BlackboardComponent.h>
 #include <Tests/AiTestCheck.h>
+#include <Tests/AiTestPhysics.h>
 #include <Tests/AiTestWorld.h>
 
 /// \brief Behavior logic that records what the brain does with it, and can delete its own owner.
@@ -414,6 +421,16 @@ namespace
     request.m_WatchedObject = plUuid(11, 22);
     request.m_bCaptureEqs = true;
     request.m_fHistorySince = 12.5;
+    request.m_vInspectSector = plVec2I32(3, 4);
+    request.m_bRebuildSector = true;
+    request.m_Order.m_Action = plAiDebugRequest::OrderCommand::Action::Issue;
+    request.m_Order.m_sSquad = "Delta";
+    request.m_Order.m_uiIntent = plAiSquadIntent::Hold;
+    request.m_Order.m_bRegion = true;
+    request.m_Order.m_vRegionMin = plVec2(1, 2);
+    request.m_Order.m_vRegionMax = plVec2(5, 6);
+    request.m_Order.m_fSeconds = 20.0f;
+    request.m_Order.m_bNoRetreat = true;
 
     plDataBuffer buffer;
     request.ToBuffer(buffer);
@@ -421,6 +438,9 @@ namespace
     plAiDebugRequest requestRead;
     Check(requestRead.FromBuffer(buffer).Succeeded() && requestRead.m_uiRequestId == 7 && requestRead.m_WatchedObject == plUuid(11, 22) && requestRead.m_bCaptureEqs && requestRead.m_fHistorySince == 12.5,
       "Debug protocol: the poll round-trips");
+    Check(requestRead.m_vInspectSector == plVec2I32(3, 4) && requestRead.m_bRebuildSector && requestRead.m_Order.m_Action == plAiDebugRequest::OrderCommand::Action::Issue && requestRead.m_Order.m_sSquad == "Delta" &&
+            requestRead.m_Order.m_uiIntent == plAiSquadIntent::Hold && requestRead.m_Order.m_bRegion && requestRead.m_Order.m_vRegionMax == plVec2(5, 6) && requestRead.m_Order.m_fSeconds == 20.0f && requestRead.m_Order.m_bNoRetreat,
+      "Debug protocol: the sector and the squad order of a poll round-trip");
 
     plAiDebugFrame frame;
     frame.m_uiRequestId = 7;
@@ -446,6 +466,34 @@ namespace
     frame.m_Watched.m_Blackboard.ExpandAndGetRef().m_sValue = "InCover";
     frame.m_Stats.m_uiAgents = 1;
 
+    frame.m_Watched.m_sTeam = "Blue";
+    frame.m_Watched.m_bHasThreatMap = true;
+    frame.m_Watched.m_fThreatHere = 0.42f;
+    frame.m_Watched.m_fDangerHere = 0.5f;
+    frame.m_Watched.m_bHasClaim = true;
+    plAiDebugFrame::Watched::CoverCandidate& candidate = frame.m_Watched.m_CoverCandidates.ExpandAndGetRef();
+    candidate.m_vPosition = plVec3(1, 2, 3);
+    candidate.m_fProtection = 1.0f;
+    candidate.m_fScore = 0.7f;
+    candidate.m_bPicked = true;
+
+    frame.m_Navmesh.m_bPresent = true;
+    frame.m_Navmesh.m_sName = "Default";
+    frame.m_Navmesh.m_uiPolyBudget = 2048;
+    plAiDebugFrame::NavSector& sector = frame.m_Navmesh.m_Sectors.ExpandAndGetRef();
+    sector.m_vCoord = plVec2I32(5, 6);
+    sector.m_uiPolys = 321;
+    sector.m_fProgress = 0.5f;
+    sector.m_bRunning = true;
+
+    plAiDebugFrame::Squad& squad = frame.m_Squads.ExpandAndGetRef();
+    squad.m_sId = "Delta";
+    squad.m_bHasOrder = true;
+    squad.m_uiOrderIntent = plAiSquadIntent::Hold;
+    squad.m_fOrderRemaining = 12.0;
+    squad.m_Members.ExpandAndGetRef().m_bAttackToken = true;
+    squad.m_History.ExpandAndGetRef().m_sText = "Order Hold issued";
+
     frame.ToBuffer(buffer);
 
     plAiDebugFrame frameRead;
@@ -456,6 +504,15 @@ namespace
     Check(frameRead.m_bHasWatched && frameRead.m_Watched.m_Behaviors.GetCount() == 1 && frameRead.m_Watched.m_Behaviors[0].m_Considerations.GetCount() == 1 &&
             frameRead.m_Watched.m_Behaviors[0].m_Considerations[0].m_fRaw == 3.0f && frameRead.m_Watched.m_Targets.GetCount() == 1 && frameRead.m_Watched.m_Blackboard[0].m_sValue == "InCover",
       "Debug protocol: the watched agent round-trips");
+    Check(frameRead.m_Watched.m_sTeam == "Blue" && frameRead.m_Watched.m_bHasThreatMap && frameRead.m_Watched.m_fThreatHere == 0.42f && frameRead.m_Watched.m_bHasClaim && frameRead.m_Watched.m_CoverCandidates.GetCount() == 1 &&
+            frameRead.m_Watched.m_CoverCandidates[0].m_vPosition == plVec3(1, 2, 3) && frameRead.m_Watched.m_CoverCandidates[0].m_bPicked,
+      "Debug protocol: the threat map and the cover candidates round-trip");
+    Check(frameRead.m_Navmesh.m_bPresent && frameRead.m_Navmesh.m_sName == "Default" && frameRead.m_Navmesh.m_Sectors.GetCount() == 1 && frameRead.m_Navmesh.m_Sectors[0].m_vCoord == plVec2I32(5, 6) &&
+            frameRead.m_Navmesh.m_Sectors[0].m_uiPolys == 321 && frameRead.m_Navmesh.m_Sectors[0].m_bRunning,
+      "Debug protocol: the navmesh sectors round-trip");
+    Check(frameRead.m_Squads.GetCount() == 1 && frameRead.m_Squads[0].m_sId == "Delta" && frameRead.m_Squads[0].m_bHasOrder && frameRead.m_Squads[0].m_fOrderRemaining == 12.0 && frameRead.m_Squads[0].m_Members.GetCount() == 1 &&
+            frameRead.m_Squads[0].m_Members[0].m_bAttackToken && frameRead.m_Squads[0].m_History.GetCount() == 1,
+      "Debug protocol: the squads round-trip");
   }
 
   void TestLogicDeletesOwner(const char* szName, bool bInUpdate)
@@ -1253,6 +1310,393 @@ namespace
 
     Check(plAiTestUseListenerComponent::s_uiEnds == 2, "T4: a smart object removed mid-use hears the use ended");
   }
+
+  //////////////////////////////////////////////////////////////////////////
+  // A2
+
+  void TestDangerEvadesCover()
+  {
+    s_Record = TestRecord();
+
+    // a locked combat behavior: ordinary decisions cannot replace it, only the danger can end it
+    plAiBehaviorResourceDescriptor blueFight = MakeBehavior("FightBlue", plAiBehaviorCategory::Combat, 1.0f);
+    GetLogic(blueFight).m_bAlwaysLock = true;
+    plAiBehaviorResourceDescriptor redFight = MakeBehavior("FightRed", plAiBehaviorCategory::Combat, 1.0f);
+    GetLogic(redFight).m_bAlwaysLock = true;
+
+    const plAiArchetypeResourceHandle hBlue = CreateArchetype("AiTest/A2/Blue", {CreateBehavior("AiTest/A2/FightBlue", std::move(blueFight))}, [](plAiArchetypeResourceDescriptor& desc) { desc.m_sTeam.Assign("Blue"); });
+    const plAiArchetypeResourceHandle hRed = CreateArchetype("AiTest/A2/Red", {CreateBehavior("AiTest/A2/FightRed", std::move(redFight))}, [](plAiArchetypeResourceDescriptor& desc) { desc.m_sTeam.Assign("Red"); });
+
+    plAiTestWorld world("AiTest A2 evade");
+
+    plAiNavMesh* pNavMesh = nullptr;
+    plAiTacticalWorldModule* pTactical = nullptr;
+    plAiThreatWorldModule* pThreat = nullptr;
+    plAiBrainWorldModule* pBrain = nullptr;
+
+    {
+      PL_LOCK(world.GetWorld().GetWriteMarker());
+
+      world.GetWorld().GetOrCreateModule<plAiTestNavGeoWorldModule>()->AddFloor(plVec2(-60, -60), plVec2(60, 60), 0.0f);
+      world.GetWorld().GetOrCreateModule<plAiTestPhysicsWorldModule>();
+
+      plAiNavMeshWorldModule* pNavModule = world.GetWorld().GetOrCreateModule<plAiNavMeshWorldModule>();
+      pNavMesh = pNavModule->GetNavMesh(pNavModule->GetConfig().m_NavmeshConfigs[0].m_sName);
+      pTactical = world.GetWorld().GetOrCreateModule<plAiTacticalWorldModule>();
+      pThreat = world.GetWorld().GetOrCreateModule<plAiThreatWorldModule>();
+      pBrain = world.GetWorld().GetOrCreateModule<plAiBrainWorldModule>();
+    }
+
+    const plTime deadline = plTime::Now() + plTime::MakeFromSeconds(15.0);
+    for (bool bReady = false; !bReady && plTime::Now() < deadline;)
+    {
+      {
+        PL_LOCK(world.GetWorld().GetWriteMarker());
+        bReady = pNavMesh->RequestSector(plVec2(0, 0), plVec2(20, 20));
+      }
+
+      world.Step(1);
+      plThreadUtils::Sleep(plTime::MakeFromMilliseconds(1));
+    }
+
+    plComponentHandle hBlueAgent;
+    plComponentHandle hRedAgent;
+    const plGameObjectHandle hBlueGuard = SpawnAgent(world, "BlueGuard", hBlue, nullptr, &hBlueAgent);
+    const plGameObjectHandle hRedGuard = SpawnAgent(world, "RedGuard", hRed, nullptr, &hRedAgent);
+
+    // authored cover for both, inside the area the grenade will cover
+    for (const plVec3& vPosition : {plVec3(3, 0, 0), plVec3(-3, 0, 0)})
+    {
+      plGameObject* pCover = world.CreateObject("Cover", vPosition);
+      PL_LOCK(world.GetWorld().GetWriteMarker());
+      plAiCoverPointComponent* pComponent = nullptr;
+      plAiCoverPointComponent::CreateComponent(pCover, pComponent);
+    }
+
+    world.Step(45);
+
+    bool bClaimed = true;
+
+    {
+      PL_LOCK(world.GetWorld().GetWriteMarker());
+
+      plAiCoverPointHandle hBlueCover, hRedCover;
+      plAiCoverPoint point;
+      bClaimed &= pTactical->FindNearestCover(plVec3(3, 0, 0), 2.0f, false, hBlueCover, point) && pTactical->ClaimCover(hBlueCover, hBlueGuard, plTime::MakeFromSeconds(60));
+      bClaimed &= pTactical->FindNearestCover(plVec3(-3, 0, 0), 2.0f, false, hRedCover, point) && pTactical->ClaimCover(hRedCover, hRedGuard, plTime::MakeFromSeconds(60));
+    }
+
+    Check(bClaimed, "A2: both guards claim their authored cover");
+    Check(WasActivated("FightBlue") && WasActivated("FightRed"), "A2: both guards fight");
+
+    auto CountActivations = [](const char* szTag) {
+      plUInt32 uiCount = 0;
+      for (const plString& sTag : s_Record.m_Activations)
+        uiCount += (sTag == szTag) ? 1 : 0;
+      return uiCount;
+    };
+
+    auto IsClaiming = [&](const plGameObjectHandle& hGuard) {
+      PL_LOCK(world.GetWorld().GetReadMarker());
+      plAiCoverPointHandle hCover;
+      return pTactical->GetClaimedCover(hGuard, hCover);
+    };
+
+    Check(IsClaiming(hBlueGuard) && IsClaiming(hRedGuard), "A2: both guards hold their cover");
+    Check(CountActivations("FightBlue") == 1, "A2: the blue guard fights once so far");
+
+    // a grenade that matters to the blue team, over both covers
+    {
+      PL_LOCK(world.GetWorld().GetWriteMarker());
+      pThreat->AddDangerArea(plVec3(0, 0, 0), 8.0f, plTime::MakeZero(), "Blue");
+    }
+
+    world.Step(45); // under a second: a squad tick is a quarter second
+
+    Check(!IsClaiming(hBlueGuard), "A2: the blue guard leaves cover that a grenade covers");
+    Check(CountActivations("FightBlue") == 2, "A2: its behavior ends and starts again, picking its cover anew");
+    Check(IsClaiming(hRedGuard) && CountActivations("FightRed") == 1, "A2: a team the grenade does not concern stays where it is");
+
+    plDynamicArray<plAiBrainWorldModule::HistoryEntry> history;
+    bool bInterrupted = false;
+    {
+      PL_LOCK(world.GetWorld().GetReadMarker());
+      pBrain->GetAgentHistory(hBlueAgent, history);
+    }
+
+    for (const auto& entry : history)
+      bInterrupted |= entry.m_Outcome == plAiDecisionOutcome::Interrupted;
+
+    Check(bInterrupted, "A2: the history says the behavior was interrupted");
+  }
+
+  //////////////////////////////////////////////////////////////////////////
+  // A3
+
+  struct OrderSquad
+  {
+    OrderSquad(const char* szName, plUInt32 uiMembers, const plAiArchetypeResourceHandle& hArchetype)
+      : m_World(szName)
+    {
+      for (plUInt32 i = 0; i < uiMembers; ++i)
+      {
+        m_hMembers.PushBack(plGameObjectHandle());
+        m_Boards.PushBack(plSharedPtr<plBlackboard>());
+        m_hMembers[i] = SpawnSquadMember(m_World, "Member", plVec3(static_cast<float>(i), 0, 0), hArchetype, m_Boards[i]);
+      }
+    }
+
+    plInt32 Intent(plUInt32 i) { return m_Boards[i]->GetEntryValue("Ai_SquadIntent").ConvertTo<plInt32>(); }
+    bool AllHaveIntent(plAiSquadIntent::Enum intent)
+    {
+      bool bAll = true;
+      for (plUInt32 i = 0; i < m_Boards.GetCount(); ++i)
+        bAll &= Intent(i) == static_cast<plInt32>(intent);
+      return bAll;
+    }
+
+    void Issue(const plAiSquadOrder& order)
+    {
+      PL_LOCK(m_World.GetWorld().GetWriteMarker());
+      plHashedString sSquad;
+      sSquad.Assign("Alpha");
+      m_World.GetWorld().GetModule<plAiSquadWorldModule>()->IssueOrder(sSquad, order);
+    }
+
+    void Cancel()
+    {
+      PL_LOCK(m_World.GetWorld().GetWriteMarker());
+      m_World.GetWorld().GetModule<plAiSquadWorldModule>()->CancelOrder(plTempHashedString("Alpha"));
+    }
+
+    bool GetOrder(plAiSquadOrder& out_order, plTime& out_remaining)
+    {
+      const plWorld& world = m_World.GetWorld();
+      PL_LOCK(world.GetReadMarker());
+      return world.GetModule<plAiSquadWorldModule>()->GetOrder(plTempHashedString("Alpha"), out_order, out_remaining);
+    }
+
+    bool HistoryHas(plStringView sText)
+    {
+      const plWorld& world = m_World.GetWorld();
+      PL_LOCK(world.GetReadMarker());
+
+      plDynamicArray<plAiSquadWorldModule::SquadInfo> squads;
+      world.GetModule<plAiSquadWorldModule>()->GetSquadInfos(squads);
+
+      for (const auto& squad : squads)
+      {
+        for (const auto& entry : squad.m_History)
+        {
+          if (entry.m_sText.FindSubString(sText) != nullptr)
+            return true;
+        }
+      }
+
+      return false;
+    }
+
+    plAiTestWorld m_World;
+    plHybridArray<plGameObjectHandle, 4> m_hMembers;
+    plHybridArray<plSharedPtr<plBlackboard>, 4> m_Boards;
+  };
+
+  plAiSquadOrder MakeOrder(plAiSquadIntent::Enum intent, float fSeconds, bool bRegion)
+  {
+    plAiSquadOrder order;
+    order.m_Intent = intent;
+    order.m_Duration = plTime::MakeFromSeconds(fSeconds);
+    order.m_sIssuer = "Test";
+
+    if (bRegion)
+    {
+      order.m_bHasRegion = true;
+      order.m_vRegionMin = plVec2(10, 10);
+      order.m_vRegionMax = plVec2(20, 20);
+    }
+
+    return order;
+  }
+
+  void TestSquadOrders()
+  {
+    s_Record = TestRecord();
+
+    const plAiArchetypeResourceHandle hArchetype = CreateArchetype("AiTest/A3/Archetype", {CreateBehavior("AiTest/A3/Idle", MakeBehavior("Idle", plAiBehaviorCategory::Idle, 0.5f))});
+
+    {
+      OrderSquad squad("AiTest A3 order", 4, hArchetype);
+      squad.m_World.Step(200); // the dwell of an automatic intent is 3 s
+
+      Check(squad.AllHaveIntent(plAiSquadIntent::Hold), "A3: a squad that knows no target holds on its own");
+
+      squad.Issue(MakeOrder(plAiSquadIntent::Engage, 2.0f, true));
+      squad.m_World.Step(30);
+
+      Check(squad.AllHaveIntent(plAiSquadIntent::Engage), "A3: the members read the order's intent");
+      Check(squad.m_Boards[0]->GetEntryValue("Ai_SquadOrderActive").ConvertTo<bool>(), "A3: the members are told an order is active");
+
+      bool bInside = true;
+      plHybridArray<plVec3, 4> slots;
+      for (plUInt32 i = 0; i < 4; ++i)
+      {
+        const plVec3 vSlot = squad.m_Boards[i]->GetEntryValue("Ai_SquadMovePos").Get<plVec3>();
+        bInside &= vSlot.x >= 10.0f && vSlot.x <= 20.0f && vSlot.y >= 10.0f && vSlot.y <= 20.0f;
+        slots.PushBack(vSlot);
+      }
+
+      Check(bInside, "A3: every member's move position is a spot in the order's region");
+      Check(!slots[0].IsEqual(slots[1], 0.1f) && !slots[0].IsEqual(slots[3], 0.1f), "A3: each member gets a spot of its own");
+
+      plAiSquadOrder order;
+      plTime remaining;
+      Check(squad.GetOrder(order, remaining) && order.m_Intent == plAiSquadIntent::Engage && order.m_sIssuer == "Test" && remaining.GetSeconds() > 0.0 && remaining.GetSeconds() <= 2.0, "A3: the module reports the order and the time left");
+
+      squad.m_World.Step(150); // 2.5 s: the order ran out
+      Check(!squad.GetOrder(order, remaining), "A3: an order is gone when its time is up");
+      Check(squad.AllHaveIntent(plAiSquadIntent::Hold), "A3: the squad goes back to its automatic intent");
+      Check(!squad.m_Boards[0]->GetEntryValue("Ai_SquadOrderActive").ConvertTo<bool>(), "A3: the members are told the order is over");
+      Check(squad.HistoryHas("expired"), "A3: the history says the order expired");
+
+      // cancel by hand
+      squad.Issue(MakeOrder(plAiSquadIntent::Retreat, 0.0f, false));
+      squad.m_World.Step(30);
+      Check(squad.AllHaveIntent(plAiSquadIntent::Retreat), "A3: a retreat order makes the squad retreat although nothing threatens it");
+      Check(squad.GetOrder(order, remaining) && remaining.IsZero(), "A3: an order without a duration lasts");
+
+      squad.Cancel();
+      squad.m_World.Step(30);
+      Check(!squad.GetOrder(order, remaining) && squad.AllHaveIntent(plAiSquadIntent::Hold), "A3: cancelling an order hands the squad back to itself");
+      Check(squad.HistoryHas("cancelled"), "A3: the history says the order was cancelled");
+    }
+
+    {
+      // losses break an order, unless it says there is no retreat
+      OrderSquad squad("AiTest A3 losses", 4, hArchetype);
+      squad.m_World.Step(200);
+      squad.Issue(MakeOrder(plAiSquadIntent::Engage, 0.0f, false));
+      squad.m_World.Step(30);
+      Check(squad.AllHaveIntent(plAiSquadIntent::Engage), "A3: the order holds before any loss");
+
+      {
+        PL_LOCK(squad.m_World.GetWorld().GetWriteMarker());
+        squad.m_World.GetWorld().DeleteObjectNow(squad.m_hMembers[0]);
+        squad.m_World.GetWorld().DeleteObjectNow(squad.m_hMembers[1]);
+      }
+
+      squad.m_World.Step(45);
+
+      plAiSquadOrder order;
+      plTime remaining;
+      Check(!squad.GetOrder(order, remaining), "A3: losing half the squad breaks the order");
+      Check(squad.Intent(2) == plAiSquadIntent::Retreat && squad.Intent(3) == plAiSquadIntent::Retreat, "A3: and the squad retreats by itself");
+      Check(squad.HistoryHas("broken by losses"), "A3: the history says what broke the order");
+    }
+
+    {
+      OrderSquad squad("AiTest A3 no retreat", 4, hArchetype);
+      squad.m_World.Step(200);
+
+      plAiSquadOrder order = MakeOrder(plAiSquadIntent::Hold, 0.0f, false);
+      order.m_bNoRetreat = true;
+      squad.Issue(order);
+      squad.m_World.Step(30);
+
+      {
+        PL_LOCK(squad.m_World.GetWorld().GetWriteMarker());
+        squad.m_World.GetWorld().DeleteObjectNow(squad.m_hMembers[0]);
+        squad.m_World.GetWorld().DeleteObjectNow(squad.m_hMembers[1]);
+        squad.m_World.GetWorld().DeleteObjectNow(squad.m_hMembers[2]);
+      }
+
+      squad.m_World.Step(45);
+
+      plTime remaining;
+      Check(squad.GetOrder(order, remaining) && squad.Intent(3) == plAiSquadIntent::Hold, "A3: an order with no retreat keeps the squad where it is");
+      Check(squad.HistoryHas("no retreat keeps the order"), "A3: the history says the order kept the squad from retreating");
+
+      squad.Cancel();
+      squad.m_World.Step(30);
+      Check(squad.Intent(3) == plAiSquadIntent::Retreat, "A3: without the order the losses make the squad retreat");
+    }
+
+    {
+      // an order for a squad that does not exist yet is taken by it when it forms
+      plAiTestWorld world("AiTest A3 pending");
+
+      {
+        PL_LOCK(world.GetWorld().GetWriteMarker());
+        plHashedString sSquad;
+        sSquad.Assign("Alpha");
+        world.GetWorld().GetOrCreateModule<plAiSquadWorldModule>()->IssueOrder(sSquad, MakeOrder(plAiSquadIntent::Engage, 0.0f, false));
+        sSquad.Assign("Bravo");
+        world.GetWorld().GetOrCreateModule<plAiSquadWorldModule>()->IssueOrder(sSquad, MakeOrder(plAiSquadIntent::Engage, 0.5f, false));
+      }
+
+      world.Step(60); // Bravo's order is over before its squad exists
+
+      plSharedPtr<plBlackboard> pAlpha, pBravo;
+      plGameObjectHandle hAlpha = SpawnSquadMember(world, "Alpha", plVec3::MakeZero(), hArchetype, pAlpha);
+
+      // the second squad id, set after the fact
+      plGameObjectHandle hBravo;
+      plGameObject* pBravoObject = world.CreateObject("Bravo", plVec3(5, 0, 0), &hBravo);
+
+      {
+        PL_LOCK(world.GetWorld().GetWriteMarker());
+        plAiAgentComponent* pAgent = nullptr;
+        plAiAgentComponent::CreateComponent(pBravoObject, pAgent);
+        pAgent->m_hArchetype = hArchetype;
+        pAgent->m_sSquadId.Assign("Bravo");
+
+        plLocalBlackboardComponent* pBoard = nullptr;
+        plLocalBlackboardComponent::CreateComponent(pBravoObject, pBoard);
+        pBravo = pBoard->GetBoard();
+      }
+
+      world.Step(200); // past the 3 s dwell of an automatic intent
+
+      Check(pAlpha->GetEntryValue("Ai_SquadIntent").ConvertTo<plInt32>() == plAiSquadIntent::Engage, "A3: a squad takes the order it was given before it formed");
+      Check(pBravo->GetEntryValue("Ai_SquadIntent").ConvertTo<plInt32>() == plAiSquadIntent::Hold, "A3: an order that ran out before its squad formed is dropped");
+
+      // the script call, from a member of the squad
+      plAiAgentComponent* pScripted = nullptr;
+      {
+        PL_LOCK(world.GetWorld().GetWriteMarker());
+        plGameObject* pObject = nullptr;
+        world.GetWorld().TryGetObject(hAlpha, pObject);
+        pObject->TryGetComponentOfBaseType(pScripted);
+        pScripted->IssueSquadOrder(plAiSquadIntent::Hold, plVec3(30, 30, 0), 4.0f, 0.0f, true);
+      }
+
+      world.Step(30);
+
+      plAiSquadOrder order;
+      plTime remaining;
+      bool bGot = false;
+      {
+        const plWorld& readWorld = world.GetWorld();
+        PL_LOCK(readWorld.GetReadMarker());
+        bGot = readWorld.GetModule<plAiSquadWorldModule>()->GetOrder(plTempHashedString("Alpha"), order, remaining);
+      }
+
+      Check(bGot && order.m_Intent == plAiSquadIntent::Hold && order.m_bNoRetreat && order.m_sIssuer == "Script" && order.m_bHasRegion && order.GetRegionCenter().IsEqual(plVec2(30, 30), 0.01f), "A3: a script gives its squad an order with a region around a position");
+      Check(pAlpha->GetEntryValue("Ai_SquadIntent").ConvertTo<plInt32>() == plAiSquadIntent::Hold, "A3: the new order replaces the old one");
+
+      {
+        PL_LOCK(world.GetWorld().GetWriteMarker());
+        pScripted->CancelSquadOrder();
+      }
+
+      {
+        const plWorld& readWorld = world.GetWorld();
+        PL_LOCK(readWorld.GetReadMarker());
+        bGot = readWorld.GetModule<plAiSquadWorldModule>()->GetOrder(plTempHashedString("Alpha"), order, remaining);
+      }
+
+      Check(!bGot, "A3: a script cancels the order of its squad");
+    }
+  }
 } // namespace
 
 void RunBrainWorldTests()
@@ -1287,4 +1731,6 @@ void RunBrainWorldTests()
   TestSquadRetreatEnds();
 
   TestLostSmartObjectClaimEndsUse();
+  TestDangerEvadesCover();
+  TestSquadOrders();
 }

@@ -9,3 +9,4 @@ void RunEqsWorldTests();
 void RunNavigationTests();
 void RunVoxelTests();
 void RunEncounterTests();
+void RunThreatTests();
