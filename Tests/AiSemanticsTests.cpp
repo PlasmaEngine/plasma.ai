@@ -1,5 +1,6 @@
 #include <AiPlugin/Eqs/EqsQueryResource.h>
 #include <AiPlugin/UtilityAI/Decision/AiBehaviorResource.h>
+#include <AiPlugin/UtilityAI/Perception/AiPerception.h>
 #include <AiPlugin/Utils/AiResponseCurve.h>
 #include <Foundation/Configuration/Startup.h>
 #include <Foundation/IO/MemoryStream.h>
@@ -22,6 +23,52 @@ void Check(bool value, const char* message)
     std::printf("FAIL: %s\n", message);
     ++s_Failures;
   }
+}
+
+static void TestFactionRelations()
+{
+  plAiFactionConfig config;
+  config.m_Teams.PushBack("Players");
+  config.m_Teams.PushBack("Civilians");
+  auto& relation = config.m_Relations.ExpandAndGetRef();
+  relation.m_sTeamA.Assign("Players");
+  relation.m_sTeamB.Assign("Civilians");
+  relation.m_Attitude = plAiAttitude::Friendly;
+  Check(config.GetAttitude("Players", "Civilians") == plAiAttitude::Friendly, "explicit faction attitude");
+  Check(config.GetAttitude("Civilians", "Players") == plAiAttitude::Friendly, "single faction relation remains symmetric");
+
+  auto& reverse = config.m_Relations.ExpandAndGetRef();
+  reverse.m_sTeamA.Assign("Civilians");
+  reverse.m_sTeamB.Assign("Players");
+  reverse.m_Attitude = plAiAttitude::Neutral;
+  Check(config.GetAttitude("Players", "Civilians") == plAiAttitude::Friendly &&
+          config.GetAttitude("Civilians", "Players") == plAiAttitude::Neutral,
+    "explicit reverse relation overrides symmetric fallback");
+  plMath::Swap(config.m_Relations[0], config.m_Relations[1]);
+  Check(config.GetAttitude("Players", "Civilians") == plAiAttitude::Friendly &&
+          config.GetAttitude("Civilians", "Players") == plAiAttitude::Neutral,
+    "directional relations do not depend on row order");
+  Check(config.GetAttitude("Players", "Players") == plAiAttitude::Friendly &&
+          config.GetAttitude("", "") == plAiAttitude::Hostile &&
+          config.GetAttitude("Players", "Unknown") == plAiAttitude::Hostile,
+    "same-team and unknown faction defaults are unchanged");
+  auto& self = config.m_Relations.ExpandAndGetRef();
+  self.m_sTeamA.Assign("Players");
+  self.m_sTeamB.Assign("Players");
+  self.m_Attitude = plAiAttitude::Hostile;
+  Check(config.GetAttitude("Players", "Players") == plAiAttitude::Hostile, "explicit self reaction overrides friendly default");
+
+  plDefaultMemoryStreamStorage storage;
+  plMemoryStreamWriter writer(&storage);
+  config.Save(writer);
+  plMemoryStreamReader reader(&storage);
+  plAiFactionConfig copy;
+  copy.Load(reader);
+  Check(copy.m_Teams == config.m_Teams && copy.m_Relations.GetCount() == 3, "faction config keeps version-one serialization");
+  Check(copy.GetAttitude("Players", "Civilians") == plAiAttitude::Friendly &&
+          copy.GetAttitude("Civilians", "Players") == plAiAttitude::Neutral &&
+          copy.GetAttitude("Players", "Players") == plAiAttitude::Hostile,
+    "directional and self relations survive serialization");
 }
 
 static void TestFilters()
@@ -310,6 +357,7 @@ static void CheckMigratedEqsResource(const char* path)
 int main(int argc, char** argv)
 {
   plStartup::StartupCoreSystems();
+  TestFactionRelations();
   TestCurves();
   TestFilters();
   TestMissingData();

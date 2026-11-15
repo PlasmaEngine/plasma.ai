@@ -44,8 +44,17 @@ plAiAttitude::Enum plAiFactionConfig::GetAttitude(const plTempHashedString& sTea
 
   for (const auto& relation : m_Relations)
   {
-    if ((relation.m_sTeamA == sTeamA && relation.m_sTeamB == sTeamB) ||
-        (relation.m_sTeamA == sTeamB && relation.m_sTeamB == sTeamA))
+    if (relation.m_sTeamA == sTeamA && relation.m_sTeamB == sTeamB)
+    {
+      return static_cast<plAiAttitude::Enum>(relation.m_Attitude.GetValue());
+    }
+  }
+
+  // A single entry keeps the historical symmetric behavior. An explicit entry in
+  // each direction can express different attitudes without depending on row order.
+  for (const auto& relation : m_Relations)
+  {
+    if (relation.m_sTeamA == sTeamB && relation.m_sTeamB == sTeamA)
     {
       return static_cast<plAiAttitude::Enum>(relation.m_Attitude.GetValue());
     }

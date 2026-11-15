@@ -82,6 +82,8 @@ PL_DECLARE_REFLECTABLE_TYPE(PL_AIPLUGIN_DLL, plAiAttitude);
 ///
 /// Unknown team pairs default to Hostile, so agents react to everything until factions are
 /// explicitly configured.
+/// An exact directed relation takes priority over a reverse relation. With only one entry,
+/// the relation applies in both directions; use two entries for asymmetric attitudes.
 struct PL_AIPLUGIN_DLL plAiFactionConfig
 {
   struct Relation
