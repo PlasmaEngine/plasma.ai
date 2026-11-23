@@ -28,7 +28,7 @@ PL_END_DYNAMIC_REFLECTED_TYPE;
 
 namespace
 {
-  plGameObject* GetOwnerObject(plStateMachineInstance& ref_instance)
+  plGameObject* GetOwnerObjectSm(plStateMachineInstance& ref_instance)
   {
     if (plComponent* pComponent = plDynamicCast<plComponent*>(&ref_instance.GetOwner()))
     {
@@ -86,7 +86,7 @@ void plStateMachineState_AiNavigateTo::OnEnter(plStateMachineInstance& ref_insta
 
   SetBlackboardInt(ref_instance, m_sResultEntry, 0);
 
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectSm(ref_instance);
   if (pOwner == nullptr)
     return;
 
@@ -129,7 +129,7 @@ void plStateMachineState_AiNavigateTo::OnExit(plStateMachineInstance& ref_instan
 
   if (pData->m_bNavigationStarted && !pData->m_bFinished)
   {
-    if (plGameObject* pOwner = GetOwnerObject(ref_instance))
+    if (plGameObject* pOwner = GetOwnerObjectSm(ref_instance))
     {
       plAiNavigationComponent* pNavigation = nullptr;
       if (pOwner->TryGetComponentOfBaseType(pNavigation))
@@ -147,7 +147,7 @@ void plStateMachineState_AiNavigateTo::Update(plStateMachineInstance& ref_instan
   if (pData->m_bFinished)
     return;
 
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectSm(ref_instance);
   if (pOwner == nullptr)
     return;
 
@@ -557,7 +557,7 @@ void plStateMachineState_AiPickPatrolPoint::OnEnter(plStateMachineInstance& ref_
 {
   auto pData = static_cast<InstanceData*>(pInstanceData);
 
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectSm(ref_instance);
   plWorld* pWorld = ref_instance.GetOwnerWorld();
 
   const plSharedPtr<plBlackboard>& pBlackboard = ref_instance.GetBlackboard();
@@ -934,7 +934,7 @@ void plStateMachineState_AiRunActions::OnExit(plStateMachineInstance& ref_instan
 {
   auto pData = static_cast<InstanceData*>(pInstanceData);
 
-  plGameObject* pOwner = plAiBehaviorLogic::IsWorldShuttingDown() ? nullptr : GetOwnerObject(ref_instance);
+  plGameObject* pOwner = plAiBehaviorLogic::IsWorldShuttingDown() ? nullptr : GetOwnerObjectSm(ref_instance);
   if (pOwner != nullptr)
   {
     pData->m_Queue.CancelCurrentActions(*pOwner);
@@ -950,7 +950,7 @@ void plStateMachineState_AiRunActions::Update(plStateMachineInstance& ref_instan
   if (pData->m_bFinished)
     return;
 
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectSm(ref_instance);
   if (pOwner == nullptr)
     return;
 

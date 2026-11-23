@@ -15,7 +15,7 @@ public:
 
   virtual void FlagNeededPerceptions(plAiPerceptionManager& ref_PerceptionManager) override;
 
-  virtual plAiBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
+  virtual plAiLegacyBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
   virtual void ActivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override;
   void ReactivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override;
 
@@ -35,7 +35,7 @@ public:
 
   virtual void FlagNeededPerceptions(plAiPerceptionManager& ref_PerceptionManager) override;
 
-  virtual plAiBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
+  virtual plAiLegacyBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
   virtual void ActivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override;
   void ReactivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override {}
 
@@ -55,7 +55,7 @@ public:
 
   virtual void FlagNeededPerceptions(plAiPerceptionManager& ref_PerceptionManager) override;
 
-  virtual plAiBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
+  virtual plAiLegacyBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
   virtual void ActivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override;
   void ReactivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override {}
 
@@ -75,7 +75,7 @@ public:
 
   virtual void FlagNeededPerceptions(plAiPerceptionManager& ref_PerceptionManager) override;
 
-  virtual plAiBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
+  virtual plAiLegacyBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) override;
   virtual void ActivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override;
   void ReactivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) override {}
 

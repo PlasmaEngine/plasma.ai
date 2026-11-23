@@ -19,10 +19,10 @@ enum class plAiScoreCategory
   Interrupt,   ///< things that even override combat scenarios (hit reactions, falling down, etc)
 };
 
-class plAiBehaviorScore
+class plAiLegacyBehaviorScore
 {
 public:
-  plAiBehaviorScore() {}
+  plAiLegacyBehaviorScore() {}
 
   void SetScore(plAiScoreCategory category, float fValue)
   {
@@ -66,7 +66,7 @@ public:
   virtual bool IsAvailable(float fActiveBehaviorScore) const { return true; }
   virtual void FlagNeededPerceptions(plAiPerceptionManager& ref_PerceptionManager) = 0;
 
-  virtual plAiBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) = 0;
+  virtual plAiLegacyBehaviorScore DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager) = 0;
 
   virtual void ActivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) = 0;
   virtual void ReactivateBehavior(plGameObject& owner, const plAiPerception* pPerception, plAiActionQueue& inout_ActionQueue) = 0;

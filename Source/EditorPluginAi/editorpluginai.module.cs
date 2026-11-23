@@ -15,5 +15,9 @@ public class EditorPluginAiModule : ModuleRules
         // The cards and previews are engine-drawn: EditorUi and the retained UI runtime.
         PlasmaPackageSdk.AddImportLibrary(this, context, "plEditorUi");
         PlasmaPackageSdk.AddImportLibrary(this, context, "plGameUiPlugin");
+
+        // Each editor view keeps its own file-local layout constants and helpers under the same names (Publish, Name,
+        // s_fToolbarHeight), which collide when views share a unity batch.
+        UseUnityBuild = false;
     }
 }

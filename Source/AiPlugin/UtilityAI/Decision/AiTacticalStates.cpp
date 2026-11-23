@@ -42,7 +42,7 @@ PL_END_DYNAMIC_REFLECTED_TYPE;
 
 namespace
 {
-  plGameObject* GetOwnerObject(plStateMachineInstance& ref_instance)
+  plGameObject* GetOwnerObjectTac(plStateMachineInstance& ref_instance)
   {
     if (plComponent* pComponent = plDynamicCast<plComponent*>(&ref_instance.GetOwner()))
     {
@@ -114,7 +114,7 @@ plStateMachineState_AiPickTacticalPoint::~plStateMachineState_AiPickTacticalPoin
 bool plStateMachineState_AiPickTacticalPoint::SubmitQuery(plStateMachineInstance& ref_instance, InstanceData* pData) const
 {
   plWorld* pWorld = ref_instance.GetOwnerWorld();
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectTac(ref_instance);
 
   if (pWorld == nullptr || pOwner == nullptr)
     return false;
@@ -166,7 +166,7 @@ void plStateMachineState_AiPickTacticalPoint::Update(plStateMachineInstance& ref
     return;
 
   plWorld* pWorld = ref_instance.GetOwnerWorld();
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectTac(ref_instance);
 
   if (pWorld == nullptr || pOwner == nullptr)
     return;
@@ -280,7 +280,7 @@ void plStateMachineState_AiPickTacticalPoint::OnExit(plStateMachineInstance& ref
 
   if (m_bReleaseClaimOnExit)
   {
-    if (plGameObject* pOwner = GetOwnerObject(ref_instance))
+    if (plGameObject* pOwner = GetOwnerObjectTac(ref_instance))
     {
       pTactical->ReleaseClaim(pOwner->GetHandle());
     }
@@ -370,7 +370,7 @@ plStateMachineState_AiPickPeekPosition::~plStateMachineState_AiPickPeekPosition(
 void plStateMachineState_AiPickPeekPosition::OnEnter(plStateMachineInstance& ref_instance, void* pInstanceData, const plStateMachineState* pFromState) const
 {
   plWorld* pWorld = ref_instance.GetOwnerWorld();
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectTac(ref_instance);
 
   if (pWorld == nullptr || pOwner == nullptr)
   {
@@ -455,7 +455,7 @@ plStateMachineState_AiReleaseCover::~plStateMachineState_AiReleaseCover() = defa
 void plStateMachineState_AiReleaseCover::OnEnter(plStateMachineInstance& ref_instance, void* pInstanceData, const plStateMachineState* pFromState) const
 {
   plWorld* pWorld = ref_instance.GetOwnerWorld();
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectTac(ref_instance);
 
   if (pWorld == nullptr || pOwner == nullptr)
     return;

@@ -156,7 +156,7 @@ namespace
   using Status = plAiEqsQueryResult::Status;
 
   template <typename T>
-  plUniquePtr<T> MakeUnique()
+  plUniquePtr<T> MakeUniqueEqs()
   {
     return plUniquePtr<T>(PL_DEFAULT_NEW(T));
   }
@@ -164,14 +164,14 @@ namespace
   template <typename TestType>
   void AddTest(plAiEqsQueryDesc& ref_desc)
   {
-    plUniquePtr<TestType> pTest = MakeUnique<TestType>();
+    plUniquePtr<TestType> pTest = MakeUniqueEqs<TestType>();
     pTest->m_Purpose = plAiEqsTestPurpose::ScoreOnly;
     ref_desc.m_Tests.ExpandAndGetRef().m_pTest = std::move(pTest);
   }
 
   plAiEqsQueryResourceHandle CreateQuery(const char* szResourceID, plAiEqsQueryDesc&& desc)
   {
-    desc.m_pGenerator = MakeUnique<plAiTestEqsGenerator>();
+    desc.m_pGenerator = MakeUniqueEqs<plAiTestEqsGenerator>();
     return plResourceManager::CreateResource<plAiEqsQueryResource>(szResourceID, std::move(desc));
   }
 
@@ -301,7 +301,7 @@ namespace
   {
     plAiEqsQueryDesc desc;
 
-    plUniquePtr<plAiTestEqsTest_ByX> pFilter = MakeUnique<plAiTestEqsTest_ByX>();
+    plUniquePtr<plAiTestEqsTest_ByX> pFilter = MakeUniqueEqs<plAiTestEqsTest_ByX>();
     pFilter->m_Purpose = plAiEqsTestPurpose::FilterAndScore;
     pFilter->m_FilterCondition = plAiEqsFilterCondition::AtLeast;
     pFilter->m_fFilterMin = 2.0f;

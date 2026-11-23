@@ -11,7 +11,7 @@ namespace
 {
   using WaveStatus = plAiEncounterDirectorComponent::WaveStatus;
 
-  plString GetObjectName(const plWorld* pWorld, const plGameObjectHandle& hObject)
+  plString GetEncounterObjectName(const plWorld* pWorld, const plGameObjectHandle& hObject)
   {
     const plGameObject* pObject = nullptr;
     if (!pWorld->TryGetObject(hObject, pObject))
@@ -92,7 +92,7 @@ namespace
     out_wave.m_Object = plAiDebugHandler::GetObjectId(pContext, pWave->GetOwner()->GetHandle());
     out_wave.m_sName = pWave->GetOwner()->GetName();
     out_wave.m_Spawner = plAiDebugHandler::GetObjectId(pContext, status.m_hSpawner);
-    out_wave.m_sSpawner = GetObjectName(pWorld, status.m_hSpawner);
+    out_wave.m_sSpawner = GetEncounterObjectName(pWorld, status.m_hSpawner);
     out_wave.m_sSquad = status.m_sSquad.GetView();
     out_wave.m_sTrigger = DescribeTrigger(*pWave, status);
     out_wave.m_uiState = status.m_State.GetValue();

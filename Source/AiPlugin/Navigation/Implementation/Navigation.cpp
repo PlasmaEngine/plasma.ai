@@ -130,7 +130,10 @@ void plAiNavigation::Update()
 
     if (!m_PathCorridor.movePosition(plRcPos(m_vCurrentPosition), &m_Query, m_pFilter))
     {
-      PL_REPORT_FAILURE("Steered into invalid position."); // not sure under which conditions this can happen
+      // The corridor cannot follow the agent to its new position: something other than the steering moved it (physics
+      // pushed or knocked a character controller off the corridor's polygons, a teleport), or the corridor's polygons
+      // changed. A new search from where the agent is now recovers.
+      plLog::Debug("plAiNavigation: the agent left its path corridor; searching the path again.");
       CancelNavigation();
       m_State = State::StartNewSearch;
       return;

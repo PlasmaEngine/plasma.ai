@@ -18,7 +18,7 @@ void plAiBehaviorGoToPOI::FlagNeededPerceptions(plAiPerceptionManager& ref_Perce
   ref_PerceptionManager.FlagPerceptionTypeAsNeeded("plAiPerceptionPOI");
 }
 
-plAiBehaviorScore plAiBehaviorGoToPOI::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
+plAiLegacyBehaviorScore plAiBehaviorGoToPOI::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
 {
   if (!perceptionManager.HasPerceptionsOfType("plAiPerceptionPOI"))
     return {};
@@ -29,7 +29,7 @@ plAiBehaviorScore plAiBehaviorGoToPOI::DetermineBehaviorScore(plGameObject& owne
   const plVec3 vOwnerPos = owner.GetGlobalPosition();
   float fClosestSqr = plMath::HighValue<float>();
 
-  plAiBehaviorScore res;
+  plAiLegacyBehaviorScore res;
 
   for (const plAiPerception* pPerception0 : perceptions)
   {
@@ -112,7 +112,7 @@ void plAiBehaviorWander::FlagNeededPerceptions(plAiPerceptionManager& ref_Percep
   ref_PerceptionManager.FlagPerceptionTypeAsNeeded("plAiPerceptionWander");
 }
 
-plAiBehaviorScore plAiBehaviorWander::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
+plAiLegacyBehaviorScore plAiBehaviorWander::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
 {
   if (!perceptionManager.HasPerceptionsOfType("plAiPerceptionWander"))
     return {};
@@ -125,7 +125,7 @@ plAiBehaviorScore plAiBehaviorWander::DetermineBehaviorScore(plGameObject& owner
 
   const plUInt32 uiPerceptionIdx = owner.GetWorld()->GetRandomNumberGenerator().UIntInRange(perceptions.GetCount());
 
-  plAiBehaviorScore res;
+  plAiLegacyBehaviorScore res;
   res.SetScore(plAiScoreCategory::ActiveIdle, 0.1f);
   res.m_pPerception = perceptions[uiPerceptionIdx];
 
@@ -185,7 +185,7 @@ void plAiBehaviorGoToCheckpoint::FlagNeededPerceptions(plAiPerceptionManager& re
   ref_PerceptionManager.FlagPerceptionTypeAsNeeded("plAiPerceptionCheckpoint");
 }
 
-plAiBehaviorScore plAiBehaviorGoToCheckpoint::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
+plAiLegacyBehaviorScore plAiBehaviorGoToCheckpoint::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
 {
   if (!perceptionManager.HasPerceptionsOfType("plAiPerceptionCheckpoint"))
     return {};
@@ -198,7 +198,7 @@ plAiBehaviorScore plAiBehaviorGoToCheckpoint::DetermineBehaviorScore(plGameObjec
 
   const plUInt32 uiPerceptionIdx = owner.GetWorld()->GetRandomNumberGenerator().UIntInRange(perceptions.GetCount());
 
-  plAiBehaviorScore res;
+  plAiLegacyBehaviorScore res;
   res.SetScore(plAiScoreCategory::ActiveIdle, 0.2f);
   res.m_pPerception = perceptions[uiPerceptionIdx];
 
@@ -258,7 +258,7 @@ void plAiBehaviorQuip::FlagNeededPerceptions(plAiPerceptionManager& ref_Percepti
   ref_PerceptionManager.FlagPerceptionTypeAsNeeded("plAiPerceptionPOI");
 }
 
-plAiBehaviorScore plAiBehaviorQuip::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
+plAiLegacyBehaviorScore plAiBehaviorQuip::DetermineBehaviorScore(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
 {
   if (!perceptionManager.HasPerceptionsOfType("plAiPerceptionPOI"))
     return {};
@@ -266,7 +266,7 @@ plAiBehaviorScore plAiBehaviorQuip::DetermineBehaviorScore(plGameObject& owner, 
   plHybridArray<const plAiPerception*, 32> perceptions;
   perceptionManager.GetPerceptionsOfType("plAiPerceptionPOI", perceptions);
 
-  plAiBehaviorScore res;
+  plAiLegacyBehaviorScore res;
   res.SetScore(plAiScoreCategory::Command, 0.6f);
 
   return res;

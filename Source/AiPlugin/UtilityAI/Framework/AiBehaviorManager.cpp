@@ -41,14 +41,14 @@ void plAiBehaviorManager::FlagNeededPerceptions(plAiPerceptionManager& ref_Perce
 
 plAiBehaviorCandidate plAiBehaviorManager::DetermineBehaviorCandidate(plGameObject& owner, const plAiPerceptionManager& perceptionManager)
 {
-  plAiBehaviorScore res;
+  plAiLegacyBehaviorScore res;
   plAiBehaviorCandidate candidate;
 
   for (auto& info : m_Behaviors)
   {
     if (info.m_uiNeededInUpdate == m_uiUpdateCount)
     {
-      const plAiBehaviorScore scored = info.m_pBehavior->DetermineBehaviorScore(owner, perceptionManager);
+      const plAiLegacyBehaviorScore scored = info.m_pBehavior->DetermineBehaviorScore(owner, perceptionManager);
 
       if (scored.GetScore() > res.GetScore())
       {

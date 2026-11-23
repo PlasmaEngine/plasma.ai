@@ -33,7 +33,7 @@ PL_END_DYNAMIC_REFLECTED_TYPE;
 
 namespace
 {
-  plGameObject* GetOwnerObject(plStateMachineInstance& ref_instance)
+  plGameObject* GetOwnerObjectEqs(plStateMachineInstance& ref_instance)
   {
     if (plComponent* pComponent = plDynamicCast<plComponent*>(&ref_instance.GetOwner()))
     {
@@ -88,7 +88,7 @@ const char* plStateMachineState_AiRunEqsQuery::GetQueryFile() const
 bool plStateMachineState_AiRunEqsQuery::SubmitQuery(plStateMachineInstance& ref_instance, InstanceData* pData) const
 {
   plWorld* pWorld = ref_instance.GetOwnerWorld();
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectEqs(ref_instance);
 
   if (pWorld == nullptr || pOwner == nullptr || !m_hQuery.IsValid())
     return false;
@@ -132,7 +132,7 @@ void plStateMachineState_AiRunEqsQuery::Update(plStateMachineInstance& ref_insta
     return;
 
   plWorld* pWorld = ref_instance.GetOwnerWorld();
-  plGameObject* pOwner = GetOwnerObject(ref_instance);
+  plGameObject* pOwner = GetOwnerObjectEqs(ref_instance);
 
   if (pWorld == nullptr || pOwner == nullptr)
     return;
@@ -254,7 +254,7 @@ void plStateMachineState_AiRunEqsQuery::OnExit(plStateMachineInstance& ref_insta
   {
     if (auto* pTactical = pWorld->GetModule<plAiTacticalWorldModule>())
     {
-      if (plGameObject* pOwner = GetOwnerObject(ref_instance))
+      if (plGameObject* pOwner = GetOwnerObjectEqs(ref_instance))
       {
         pTactical->ReleaseClaim(pOwner->GetHandle());
         pTactical->ReleaseSmartObjectClaim(pOwner->GetHandle());
