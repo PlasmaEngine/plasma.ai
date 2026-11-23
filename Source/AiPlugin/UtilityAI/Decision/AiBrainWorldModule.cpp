@@ -1,6 +1,7 @@
 #include <AiPlugin/AiPluginPCH.h>
 
 #include <AiPlugin/UtilityAI/Components/AiAgentComponent.h>
+#include <AiPlugin/UtilityAI/Components/AiStimulusSourceComponent.h>
 #include <AiPlugin/UtilityAI/Decision/AiBehaviorLogic.h>
 #include <AiPlugin/UtilityAI/Decision/AiBrainWorldModule.h>
 #include <AiPlugin/UtilityAI/Decision/AiUtilityEvaluator.h>
@@ -681,6 +682,13 @@ plHashedString plAiBrainWorldModule::GetTeamOf(const plGameObject* pObject)
   if (pObject->TryGetComponentOfBaseType(pOtherAgent))
   {
     return pOtherAgent->GetResolvedTeam();
+  }
+
+  // an object that is no agent (a player, a turret) states its team through the stimulus source it makes its noises with
+  const plAiStimulusSourceComponent* pSource = nullptr;
+  if (pObject->TryGetComponentOfBaseType(pSource))
+  {
+    return pSource->m_sTeam;
   }
 
   return plHashedString();
